@@ -1,6 +1,10 @@
 .env
 .gocache/
 .gomodcache/
+.idea/
+logs/
 bin/
+sql/
+config.yaml
 *.exe
 *.test

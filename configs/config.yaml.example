@@ -1,0 +1,34 @@
+app_name: chinese-medical
+env: development
+log_level: info
+
+http:
+  host: 0.0.0.0
+  port: "8080"
+  shutdown_timeout: 10s
+
+database:
+  url: postgresql://root:root@url:port/ChineseMedical?sslmode=disable
+  max_conns: 10
+  min_conns: 1
+  connect_timeout: 5s
+  health_check_time: 30s
+
+redis:
+  addr: localhost:6379
+  username: ""
+  password: ""
+  db: 0
+
+ai:
+  base_url: https://ip:port/v1
+  endpoint_path: /images/generations
+  api_key: "key"
+  api_key_env: OPENAI_API_KEY
+  model: gpt-image-2
+  image_count: 4
+  size: 1024x768
+  quality: medium
+  output_format: png
+  output_dir: generated
+  timeout: 120s
