@@ -58,6 +58,12 @@ func (h Handler) Index(c *gin.Context) {
 	})
 }
 
+func (h Handler) ImageSplitter(c *gin.Context) {
+	c.HTML(http.StatusOK, "image_splitter.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+	})
+}
+
 func (h Handler) FoodImages(c *gin.Context) {
 	id, ok := pathID(c)
 	if !ok {
@@ -89,8 +95,10 @@ func (h Handler) FoodImages(c *gin.Context) {
 		"ImageCount": h.deps.Config.AI.ImageCount,
 		"Model":      h.deps.Config.AI.Model,
 		"BaseURL":    h.deps.Config.AI.BaseURL,
+		"Prompt":     h.generator.Prompt(item),
 		"Error":      c.Query("error"),
 		"Generated":  c.Query("generated") == "1",
+		"Uploaded":   c.Query("uploaded") == "1",
 	})
 }
 
@@ -120,6 +128,36 @@ func (h Handler) GenerateFoodImages(c *gin.Context) {
 	}
 
 	c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?generated=1")
+}
+
+func (h Handler) UploadFoodImage(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 25<<20)
+	fileHeader, err := c.FormFile("image")
+	if err != nil {
+		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape("请选择要上传的图片"))
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		h.deps.Logger.Warn("open uploaded food image", "id", id, "error", err)
+		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape("读取上传图片失败"))
+		return
+	}
+	defer file.Close()
+
+	if _, err := h.generator.SaveUploaded(id, fileHeader.Filename, file); err != nil {
+		h.deps.Logger.Warn("save uploaded food image", "id", id, "error", err)
+		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape(userFacingUploadError(err)))
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?uploaded=1")
 }
 
 func (h Handler) Healthz(c *gin.Context) {
@@ -173,6 +211,13 @@ func userFacingGenerationError(err error) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "生成超时，请稍后重试。"
+	}
+	return err.Error()
+}
+
+func userFacingUploadError(err error) string {
+	if err == nil {
+		return ""
 	}
 	return err.Error()
 }

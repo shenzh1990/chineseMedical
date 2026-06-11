@@ -27,7 +27,7 @@ ai:
   api_key_env: OPENAI_API_KEY
   model: gpt-image-2
   image_count: 4
-  size: 1024x768
+  size: 720x1280
   quality: medium
   output_format: png
   output_dir: generated

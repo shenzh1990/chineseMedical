@@ -24,6 +24,9 @@
     {{ if .Generated }}
       <section class="notice success">介绍图已生成。</section>
     {{ end }}
+    {{ if .Uploaded }}
+      <section class="notice success">图片已上传。</section>
+    {{ end }}
 
     {{ if .Food }}
       <section class="detail-layout">
@@ -58,9 +61,21 @@
           <span class="label">Endpoint</span>
           <code>{{ .BaseURL }}</code>
           <p>将生成 {{ .ImageCount }} 张统一风格、内容连贯的中文介绍图。</p>
-          <form method="post" action="/foods/{{ .Food.ID }}/images/generate">
-            <button type="submit">生成介绍图</button>
-          </form>
+          <span class="label">Prompt</span>
+          <textarea class="prompt-preview" readonly>{{ .Prompt }}</textarea>
+          <div class="image-action-row">
+            <form method="post" action="/foods/{{ .Food.ID }}/images/generate">
+              <button type="submit">生成介绍图</button>
+            </form>
+            <form class="upload-image-form" method="post" action="/foods/{{ .Food.ID }}/images/upload" enctype="multipart/form-data">
+              <label>
+                <input id="foodImageUpload" type="file" name="image" accept="image/png,image/jpeg,image/webp,image/gif" required>
+                <span>增加图片</span>
+              </label>
+              <button type="submit">上传</button>
+              <p id="foodImageUploadMeta" class="upload-image-meta">未选择图片</p>
+            </form>
+          </div>
         </aside>
       </section>
 
@@ -73,9 +88,27 @@
           {{ end }}
         </section>
       {{ else }}
-        <section class="empty">还没有生成图片。点击上方按钮开始生成。</section>
+        <section class="empty">还没有生成或上传图片。</section>
       {{ end }}
     {{ end }}
   </main>
+  <script>
+    const foodImageUpload = document.getElementById("foodImageUpload");
+    const foodImageUploadMeta = document.getElementById("foodImageUploadMeta");
+
+    if (foodImageUpload && foodImageUploadMeta) {
+      foodImageUpload.addEventListener("change", () => {
+        const file = foodImageUpload.files && foodImageUpload.files[0];
+        if (!file) {
+          foodImageUploadMeta.textContent = "未选择图片";
+          return;
+        }
+        const size = file.size >= 1024 * 1024
+          ? (file.size / 1024 / 1024).toFixed(2) + " MB"
+          : Math.max(1, Math.round(file.size / 1024)) + " KB";
+        foodImageUploadMeta.textContent = "已选择：" + file.name + "，" + size + "，" + (file.type || "未知类型");
+      });
+    }
+  </script>
 </body>
 </html>

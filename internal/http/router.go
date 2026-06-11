@@ -59,8 +59,10 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 		generator: ai.NewImageGenerator(deps.Config.AI),
 	}
 	router.GET("/", handler.Index)
+	router.GET("/tools/image-splitter", handler.ImageSplitter)
 	router.GET("/foods/:id/images", handler.FoodImages)
 	router.POST("/foods/:id/images/generate", handler.GenerateFoodImages)
+	router.POST("/foods/:id/images/upload", handler.UploadFoodImage)
 	router.GET("/healthz", handler.Healthz)
 
 	api := router.Group("/api")

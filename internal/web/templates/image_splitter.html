@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>图片分割 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Image Splitter</p>
+        <h1>图片分割</h1>
+      </div>
+      <nav class="actions">
+        <a href="/">返回列表</a>
+      </nav>
+    </header>
+
+    <section class="splitter-layout">
+      <aside class="splitter-panel">
+        <label class="file-picker">
+          <input id="imageInput" type="file" accept="image/*">
+          <span>上传图片</span>
+        </label>
+
+        <label class="control-field">
+          <span class="label">横向切片</span>
+          <input id="rowCount" type="number" min="1" max="20" value="4">
+        </label>
+
+        <label class="control-field">
+          <span class="label">纵向切片</span>
+          <input id="columnCount" type="number" min="1" max="20" value="1">
+        </label>
+
+        <div class="splitter-meta">
+          <span class="label">原图</span>
+          <strong id="sourceMeta">未选择</strong>
+        </div>
+
+        <div class="splitter-actions">
+          <button id="resetLines" type="button">均分</button>
+          <button id="downloadAll" type="button">下载切片</button>
+        </div>
+      </aside>
+
+      <section class="splitter-workspace">
+        <div id="splitterStage" class="splitter-stage">
+          <div id="dropHint" class="drop-hint">选择图片后开始</div>
+          <img id="sourceImage" alt="">
+          <div id="lineLayer" class="line-layer"></div>
+        </div>
+
+        <section id="slicePreview" class="slice-preview"></section>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const imageInput = document.getElementById("imageInput");
+    const rowCount = document.getElementById("rowCount");
+    const columnCount = document.getElementById("columnCount");
+    const sourceMeta = document.getElementById("sourceMeta");
+    const resetLines = document.getElementById("resetLines");
+    const downloadAll = document.getElementById("downloadAll");
+    const sourceImage = document.getElementById("sourceImage");
+    const splitterStage = document.getElementById("splitterStage");
+    const lineLayer = document.getElementById("lineLayer");
+    const dropHint = document.getElementById("dropHint");
+    const slicePreview = document.getElementById("slicePreview");
+
+    let sourceBitmap = null;
+    let rowRatios = [];
+    let columnRatios = [];
+    let activeLine = null;
+
+    function boundedCount(input) {
+      return Math.max(1, Math.min(20, Number(input.value) || 1));
+    }
+
+    function evenlySpaced(total) {
+      return Array.from({ length: Math.max(0, total - 1) }, (_, index) => (index + 1) / total);
+    }
+
+    function resetSplitRatios() {
+      rowRatios = evenlySpaced(boundedCount(rowCount));
+      columnRatios = evenlySpaced(boundedCount(columnCount));
+      renderLines();
+      renderPreview();
+    }
+
+    function clampRatio(value, ratios, index) {
+      const min = index === 0 ? 0.02 : ratios[index - 1] + 0.02;
+      const max = index === ratios.length - 1 ? 0.98 : ratios[index + 1] - 0.02;
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function stageRect() {
+      return sourceImage.getBoundingClientRect();
+    }
+
+    function syncLineLayer() {
+      if (!sourceBitmap) {
+        return;
+      }
+      lineLayer.style.left = sourceImage.offsetLeft + "px";
+      lineLayer.style.top = sourceImage.offsetTop + "px";
+      lineLayer.style.width = sourceImage.offsetWidth + "px";
+      lineLayer.style.height = sourceImage.offsetHeight + "px";
+    }
+
+    function positionLines() {
+      lineLayer.querySelectorAll(".split-line").forEach(line => {
+        const axis = line.dataset.axis;
+        const ratios = axis === "row" ? rowRatios : columnRatios;
+        const ratio = ratios[Number(line.dataset.index)];
+        line.style.top = "";
+        line.style.left = "";
+        line.style[axis === "row" ? "top" : "left"] = (ratio * 100) + "%";
+      });
+    }
+
+    function renderLines() {
+      lineLayer.innerHTML = "";
+      if (!sourceBitmap) {
+        return;
+      }
+      syncLineLayer();
+      rowRatios.forEach((ratio, index) => {
+        const line = document.createElement("button");
+        line.type = "button";
+        line.className = "split-line is-horizontal";
+        line.dataset.axis = "row";
+        line.dataset.index = String(index);
+        line.setAttribute("aria-label", "分割线 " + (index + 1));
+        line.addEventListener("pointerdown", event => {
+          activeLine = { axis: "row", index };
+          line.setPointerCapture(event.pointerId);
+        });
+        line.addEventListener("pointermove", event => {
+          if (!activeLine || activeLine.axis !== "row" || activeLine.index !== index) {
+            return;
+          }
+          const rect = stageRect();
+          const next = (event.clientY - rect.top) / rect.height;
+          rowRatios[index] = clampRatio(next, rowRatios, index);
+          positionLines();
+        });
+        line.addEventListener("pointerup", () => {
+          activeLine = null;
+          renderPreview();
+        });
+        line.addEventListener("pointercancel", () => {
+          activeLine = null;
+          renderPreview();
+        });
+        lineLayer.appendChild(line);
+      });
+      columnRatios.forEach((ratio, index) => {
+        const line = document.createElement("button");
+        line.type = "button";
+        line.className = "split-line is-vertical";
+        line.dataset.axis = "column";
+        line.dataset.index = String(index);
+        line.setAttribute("aria-label", "分割线 " + (index + 1));
+        line.addEventListener("pointerdown", event => {
+          activeLine = { axis: "column", index };
+          line.setPointerCapture(event.pointerId);
+        });
+        line.addEventListener("pointermove", event => {
+          if (!activeLine || activeLine.axis !== "column" || activeLine.index !== index) {
+            return;
+          }
+          const rect = stageRect();
+          const next = (event.clientX - rect.left) / rect.width;
+          columnRatios[index] = clampRatio(next, columnRatios, index);
+          positionLines();
+        });
+        line.addEventListener("pointerup", () => {
+          activeLine = null;
+          renderPreview();
+        });
+        line.addEventListener("pointercancel", () => {
+          activeLine = null;
+          renderPreview();
+        });
+        lineLayer.appendChild(line);
+      });
+      positionLines();
+    }
+
+    function axisBounds(ratios) {
+      const sorted = [...ratios].sort((a, b) => a - b);
+      const points = [0, ...sorted, 1];
+      return points.slice(0, -1).map((start, index) => ({ start, end: points[index + 1] }));
+    }
+
+    function makeCanvasPart(part) {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const x = Math.round(part.column.start * sourceBitmap.width);
+      const y = Math.round(part.row.start * sourceBitmap.height);
+      const width = Math.max(1, Math.round(part.column.end * sourceBitmap.width) - x);
+      const height = Math.max(1, Math.round(part.row.end * sourceBitmap.height) - y);
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(sourceBitmap, x, y, width, height, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+
+    function sliceParts() {
+      const rows = axisBounds(rowRatios);
+      const columns = axisBounds(columnRatios);
+      const parts = [];
+      rows.forEach((row, rowIndex) => {
+        columns.forEach((column, columnIndex) => {
+          parts.push({ row, column, rowIndex, columnIndex });
+        });
+      });
+      return parts;
+    }
+
+    function renderPreview() {
+      slicePreview.innerHTML = "";
+      if (!sourceBitmap) {
+        return;
+      }
+      sliceParts().forEach((part, index) => {
+        const canvas = makeCanvasPart(part);
+        const url = canvas.toDataURL("image/png");
+        const card = document.createElement("article");
+        card.className = "slice-card";
+        card.innerHTML = `
+          <img src="${url}" alt="切片 ${index + 1}">
+          <div>
+            <strong>${part.rowIndex + 1}-${part.columnIndex + 1}</strong>
+            <span>${canvas.width} x ${canvas.height}</span>
+          </div>
+        `;
+        slicePreview.appendChild(card);
+      });
+    }
+
+    async function loadImage(file) {
+      const objectURL = URL.createObjectURL(file);
+      sourceImage.src = objectURL;
+      sourceImage.onload = async () => {
+        sourceBitmap = await createImageBitmap(file);
+        sourceMeta.textContent = sourceBitmap.width + " x " + sourceBitmap.height;
+        dropHint.hidden = true;
+        resetSplitRatios();
+        URL.revokeObjectURL(objectURL);
+      };
+    }
+
+    function downloadSlices() {
+      if (!sourceBitmap) {
+        return;
+      }
+      sliceParts().forEach((part, index) => {
+        const canvas = makeCanvasPart(part);
+        const link = document.createElement("a");
+        link.href = canvas.toDataURL("image/png");
+        link.download = `slice-r${part.rowIndex + 1}-c${part.columnIndex + 1}-${String(index + 1).padStart(2, "0")}.png`;
+        link.click();
+      });
+    }
+
+    imageInput.addEventListener("change", event => {
+      const file = event.target.files && event.target.files[0];
+      if (file) {
+        loadImage(file);
+      }
+    });
+
+    rowCount.addEventListener("change", resetSplitRatios);
+    columnCount.addEventListener("change", resetSplitRatios);
+    resetLines.addEventListener("click", resetSplitRatios);
+    downloadAll.addEventListener("click", downloadSlices);
+    window.addEventListener("resize", renderLines);
+  </script>
+</body>
+</html>

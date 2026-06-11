@@ -41,7 +41,7 @@ ai:
   api_key_env: OPENAI_API_KEY
   model: gpt-image-1
   image_count: 4
-  size: 1024x1024
+  size: 720x1280
   quality: medium
   output_format: png
   output_dir: generated
@@ -54,6 +54,7 @@ You can also set `api_key` directly in YAML. When both are present, `api_key` ta
 ## Endpoints
 
 - `GET /` renders the embedded HTML page.
+- `GET /tools/image-splitter` opens the local image splitting tool.
 - `GET /foods/:id/images` opens the formula image generation page.
 - `POST /foods/:id/images/generate` generates formula introduction images.
 - `GET /healthz` checks PostgreSQL and Redis.
