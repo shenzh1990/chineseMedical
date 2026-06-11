@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ if .Food }}{{ .Food.Name }} - {{ end }}{{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Formula Image Studio</p>
+        <h1>{{ if .Food }}{{ .Food.Name }}{{ else }}调理方介绍图{{ end }}</h1>
+      </div>
+      <nav class="actions">
+        <a href="/">返回列表</a>
+      </nav>
+    </header>
+
+    {{ if .Error }}
+      <section class="notice error">{{ .Error }}</section>
+    {{ end }}
+    {{ if .Generated }}
+      <section class="notice success">介绍图已生成。</section>
+    {{ end }}
+
+    {{ if .Food }}
+      <section class="detail-layout">
+        <article class="food-card detail-card">
+          <div class="card-head">
+            <span>#{{ .Food.ID }}</span>
+            <h2>{{ .Food.Name }}</h2>
+          </div>
+          <dl>
+            <div>
+              <dt>来源</dt>
+              <dd>{{ if .Food.Source }}{{ .Food.Source }}{{ else }}未注明{{ end }}</dd>
+            </div>
+            <div>
+              <dt>组成</dt>
+              <dd>{{ if .Food.Food }}{{ .Food.Food }}{{ else }}未注明{{ end }}</dd>
+            </div>
+            <div>
+              <dt>制法</dt>
+              <dd>{{ if .Food.Method }}{{ .Food.Method }}{{ else }}未注明{{ end }}</dd>
+            </div>
+            <div>
+              <dt>功效</dt>
+              <dd>{{ if .Food.Effect }}{{ .Food.Effect }}{{ else }}未注明{{ end }}</dd>
+            </div>
+          </dl>
+        </article>
+
+        <aside class="generate-panel">
+          <span class="label">Model</span>
+          <strong>{{ .Model }}</strong>
+          <span class="label">Endpoint</span>
+          <code>{{ .BaseURL }}</code>
+          <p>将生成 {{ .ImageCount }} 张统一风格、内容连贯的中文介绍图。</p>
+          <form method="post" action="/foods/{{ .Food.ID }}/images/generate">
+            <button type="submit">生成介绍图</button>
+          </form>
+        </aside>
+      </section>
+
+      {{ if .Images }}
+        <section class="image-grid">
+          {{ range .Images }}
+            <a href="{{ .URL }}" target="_blank" rel="noreferrer">
+              <img src="{{ .URL }}" alt="方剂介绍图">
+            </a>
+          {{ end }}
+        </section>
+      {{ else }}
+        <section class="empty">还没有生成图片。点击上方按钮开始生成。</section>
+      {{ end }}
+    {{ end }}
+  </main>
+</body>
+</html>
