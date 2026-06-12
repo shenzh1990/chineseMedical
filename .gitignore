@@ -4,6 +4,7 @@
 .idea/
 logs/
 bin/
+dist/
 sql/
 config.yaml
 *.exe

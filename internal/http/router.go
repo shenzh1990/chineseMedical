@@ -56,14 +56,23 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	handler := Handler{
 		deps:      deps,
 		foods:     repository.NewMedicatedFoodRepository(deps.DB),
+		users:     repository.NewUserRepository(deps.DB),
 		generator: ai.NewImageGenerator(deps.Config.AI),
 	}
-	router.GET("/", handler.Index)
-	router.GET("/tools/image-splitter", handler.ImageSplitter)
-	router.GET("/foods/:id/images", handler.FoodImages)
-	router.POST("/foods/:id/images/generate", handler.GenerateFoodImages)
-	router.POST("/foods/:id/images/upload", handler.UploadFoodImage)
+	router.GET("/login", handler.Login)
+	router.POST("/login", handler.LoginPost)
+	router.POST("/logout", handler.Logout)
 	router.GET("/healthz", handler.Healthz)
+
+	protected := router.Group("/")
+	protected.Use(handler.requireAuth())
+	protected.GET("/", handler.Index)
+	protected.GET("/account/password", handler.ChangePassword)
+	protected.POST("/account/password", handler.ChangePasswordPost)
+	protected.GET("/tools/image-splitter", handler.ImageSplitter)
+	protected.GET("/foods/:id/images", handler.FoodImages)
+	protected.POST("/foods/:id/images/generate", handler.GenerateFoodImages)
+	protected.POST("/foods/:id/images/upload", handler.UploadFoodImage)
 
 	api := router.Group("/api")
 	api.GET("/health", handler.Healthz)

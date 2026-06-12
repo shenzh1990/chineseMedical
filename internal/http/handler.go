@@ -6,18 +6,99 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"chinese-medical/internal/ai"
 	"chinese-medical/internal/repository"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Handler struct {
 	deps      Dependencies
 	foods     repository.MedicatedFoodRepository
+	users     repository.UserRepository
 	generator ai.ImageGenerator
+}
+
+func (h Handler) Login(c *gin.Context) {
+	c.HTML(http.StatusOK, "login.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+		"Error":   c.Query("error"),
+	})
+}
+
+func (h Handler) LoginPost(c *gin.Context) {
+	username := strings.TrimSpace(c.PostForm("username"))
+	password := c.PostForm("password")
+	if username == "" || password == "" {
+		c.Redirect(http.StatusSeeOther, "/login?error="+url.QueryEscape("请输入用户名和密码"))
+		return
+	}
+
+	user, err := h.users.GetByUsername(c.Request.Context(), username)
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		c.Redirect(http.StatusSeeOther, "/login?error="+url.QueryEscape("用户名或密码不正确"))
+		return
+	}
+
+	setSessionCookie(c, user.Username)
+	c.Redirect(http.StatusSeeOther, "/")
+}
+
+func (h Handler) Logout(c *gin.Context) {
+	clearSessionCookie(c)
+	c.Redirect(http.StatusSeeOther, "/login")
+}
+
+func (h Handler) ChangePassword(c *gin.Context) {
+	c.HTML(http.StatusOK, "change_password.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+		"Error":   c.Query("error"),
+		"Updated": c.Query("updated") == "1",
+	})
+}
+
+func (h Handler) ChangePasswordPost(c *gin.Context) {
+	username, _ := c.Get("username")
+	currentPassword := c.PostForm("current_password")
+	newPassword := c.PostForm("new_password")
+	confirmPassword := c.PostForm("confirm_password")
+
+	if currentPassword == "" || newPassword == "" || confirmPassword == "" {
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("请完整填写密码信息"))
+		return
+	}
+	if newPassword != confirmPassword {
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("两次输入的新密码不一致"))
+		return
+	}
+	if len(newPassword) < 6 {
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("新密码至少需要 6 位"))
+		return
+	}
+
+	user, err := h.users.GetByUsername(c.Request.Context(), username.(string))
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("当前密码不正确"))
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		h.deps.Logger.Warn("hash changed password", "username", username, "error", err)
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("修改密码失败"))
+		return
+	}
+	if err := h.users.UpdatePasswordHash(c.Request.Context(), user.Username, string(hash)); err != nil {
+		h.deps.Logger.Warn("update password", "username", username, "error", err)
+		c.Redirect(http.StatusSeeOther, "/account/password?error="+url.QueryEscape("修改密码失败"))
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/account/password?updated=1")
 }
 
 func (h Handler) Index(c *gin.Context) {

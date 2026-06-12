@@ -43,6 +43,9 @@ func run() error {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
 	defer db.Close()
+	if err := database.EnsureAuthSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure auth schema: %w", err)
+	}
 
 	redisClient, err := cache.NewRedisClient(ctx, cfg.Redis)
 	if err != nil {

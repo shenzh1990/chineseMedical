@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-panel">
+      <p class="eyebrow">Chinese Medical Diet</p>
+      <h1>登录</h1>
+      {{ if .Error }}
+        <section class="notice error">{{ .Error }}</section>
+      {{ end }}
+      <form class="login-form" method="post" action="/login">
+        <label>
+          <span class="label">用户名</span>
+          <input name="username" autocomplete="username" autofocus required>
+        </label>
+        <label>
+          <span class="label">密码</span>
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

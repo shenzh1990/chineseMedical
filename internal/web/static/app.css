@@ -81,20 +81,85 @@ h1 {
   gap: 12px;
 }
 
-.actions a {
+.actions a,
+.actions button {
   display: inline-flex;
   align-items: center;
   min-height: 42px;
   padding: 0 16px;
+  border: 0;
   border-radius: 6px;
   background: #172033;
   color: #ffffff;
+  font: inherit;
   text-decoration: none;
   font-weight: 700;
+  cursor: pointer;
 }
 
-.actions a:last-child {
+.actions a:last-child,
+.actions button {
   background: #256f65;
+}
+
+.actions form {
+  margin: 0;
+}
+
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  border: 1px solid #d8deea;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 28px;
+  box-shadow: 0 16px 40px rgba(23, 32, 51, 0.06);
+}
+
+.login-panel h1 {
+  margin-bottom: 20px;
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+}
+
+.login-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #cbd4e3;
+  border-radius: 6px;
+  padding: 0 12px;
+  font: inherit;
+}
+
+.login-form button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: #256f65;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.form-footnote {
+  margin: 16px 0 0;
+  text-align: center;
+}
+
+.form-footnote a {
+  color: #256f65;
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .card-actions {

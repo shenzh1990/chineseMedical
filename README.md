@@ -53,12 +53,20 @@ You can also set `api_key` directly in YAML. When both are present, `api_key` ta
 
 ## Endpoints
 
-- `GET /` renders the embedded HTML page.
+- `GET /login` renders the login page.
+- `GET /` renders the embedded HTML page after login.
 - `GET /tools/image-splitter` opens the local image splitting tool.
 - `GET /foods/:id/images` opens the formula image generation page.
 - `POST /foods/:id/images/generate` generates formula introduction images.
 - `GET /healthz` checks PostgreSQL and Redis.
 - `GET /api/health` returns the same health payload for API consumers.
+
+On startup, the server ensures an `app_users` table exists and creates a default administrator when missing:
+
+- Username: `admin`
+- Password: value of `ADMIN_PASSWORD`, or `admin` when the variable is not set.
+
+Set `SESSION_SECRET` in production to sign login cookies with a private secret.
 
 ## Sync SQL data
 
