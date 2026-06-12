@@ -201,7 +201,8 @@ h1 {
 
 .search button,
 .search a,
-.pager a {
+.pager a,
+.page-jump button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -271,6 +272,7 @@ dd {
 
 .pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 16px;
@@ -279,6 +281,27 @@ dd {
 
 .pager span {
   color: #9aa5b5;
+}
+
+.page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.page-jump label {
+  color: #536173;
+  font-weight: 700;
+}
+
+.page-jump input[type="number"] {
+  width: 86px;
+  min-height: 40px;
+  border: 1px solid #cbd4e3;
+  border-radius: 6px;
+  padding: 0 10px;
+  font: inherit;
 }
 
 .empty {

@@ -124,18 +124,38 @@ func (h Handler) Index(c *gin.Context) {
 		return
 	}
 
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(limit) - 1) / int64(limit))
+	}
+	if totalPages > 0 && page > totalPages {
+		page = totalPages
+		offset = (page - 1) * limit
+		items, total, err = h.foods.List(ctx, query, limit, offset)
+		if err != nil {
+			h.deps.Logger.Error("list medicated foods", "error", err)
+			c.HTML(http.StatusInternalServerError, "index.html", gin.H{
+				"AppName": h.deps.Config.AppName,
+				"Env":     h.deps.Config.Env,
+				"Error":   "数据读取失败，请先执行 SQL 同步或检查数据库连接。",
+			})
+			return
+		}
+	}
+
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"AppName":  h.deps.Config.AppName,
-		"Env":      h.deps.Config.Env,
-		"Foods":    items,
-		"Total":    total,
-		"Query":    query,
-		"Page":     page,
-		"Limit":    limit,
-		"HasPrev":  page > 1,
-		"HasNext":  int64(offset+len(items)) < total,
-		"PrevPage": page - 1,
-		"NextPage": page + 1,
+		"AppName":    h.deps.Config.AppName,
+		"Env":        h.deps.Config.Env,
+		"Foods":      items,
+		"Total":      total,
+		"Query":      query,
+		"Page":       page,
+		"Limit":      limit,
+		"TotalPages": totalPages,
+		"HasPrev":    page > 1,
+		"HasNext":    int64(offset+len(items)) < total,
+		"PrevPage":   page - 1,
+		"NextPage":   page + 1,
 	})
 }
 

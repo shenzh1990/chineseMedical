@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS app_health_events (
 CREATE INDEX IF NOT EXISTS idx_app_health_events_created_at
     ON app_health_events (created_at DESC);
 
+CREATE TABLE IF NOT EXISTS app_users (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS t_medicated_food (
     id BIGINT PRIMARY KEY,
     name TEXT NOT NULL,

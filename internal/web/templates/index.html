@@ -78,7 +78,14 @@
 
       <nav class="pager">
         {{ if .HasPrev }}<a href="/?q={{ urlquery .Query }}&page={{ .PrevPage }}&limit={{ .Limit }}">上一页</a>{{ else }}<span>上一页</span>{{ end }}
-        <strong>第 {{ .Page }} 页</strong>
+        <strong>第 {{ .Page }} / {{ .TotalPages }} 页</strong>
+        <form class="page-jump" method="get" action="/">
+          <input type="hidden" name="q" value="{{ .Query }}">
+          <input type="hidden" name="limit" value="{{ .Limit }}">
+          <label for="page-jump">跳转到</label>
+          <input id="page-jump" type="number" name="page" min="1" max="{{ .TotalPages }}" value="{{ .Page }}">
+          <button type="submit">GO</button>
+        </form>
         {{ if .HasNext }}<a href="/?q={{ urlquery .Query }}&page={{ .NextPage }}&limit={{ .Limit }}">下一页</a>{{ else }}<span>下一页</span>{{ end }}
       </nav>
     {{ else }}
