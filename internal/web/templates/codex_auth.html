@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Auth</title>
+  <link rel="stylesheet" href="/static/codex_auth.css">
+</head>
+<body>
+  <main class="codex-clone-shell">
+    <header class="codex-clone-header">
+      <a class="codex-clone-brand" href="/">Codex Auth</a>
+    </header>
+
+    <section class="codex-clone-layout">
+      <aside class="codex-clone-intro">
+        <video class="codex-clone-logo" src="/static/codex-logo.mp4" autoplay loop muted playsinline aria-hidden="true"></video>
+        <h1>免验证<br>登录 Codex</h1>
+        <p>无需验证手机号，即刻生成 Codex 授权信息。</p>
+      </aside>
+
+      <section class="codex-clone-panel" aria-label="Codex 授权命令生成器">
+        <div class="codex-clone-section">
+          <div class="codex-clone-token-head">
+            <label class="codex-clone-label" for="codex-session">提供账号 Session</label>
+            <button class="codex-clone-guide" type="button" id="guideButton" aria-expanded="false">如何获取？</button>
+          </div>
+          <div class="codex-clone-guide-box" id="guideBox" hidden>
+            <div><strong>1</strong><span>登录 ChatGPT 网页版。</span></div>
+            <div><strong>2</strong><span>打开 <code>/api/auth/session</code> 并复制完整 JSON。</span></div>
+            <div><strong>3</strong><span>粘贴到下方输入框，页面只在本地解析。</span></div>
+          </div>
+          <textarea id="codex-session" class="codex-clone-textarea" spellcheck="false" autocomplete="off" placeholder="粘贴 /api/auth/session 的完整响应"></textarea>
+          <p class="codex-clone-help" id="sessionHelp">纯本地执行，不会上传任何数据</p>
+        </div>
+
+        <div class="codex-clone-section">
+          <span class="codex-clone-label">系统 / 格式</span>
+          <div class="codex-clone-segments" role="tablist" aria-label="输出格式">
+            <button class="codex-clone-segment" type="button" data-format="macos" role="tab">
+              <span aria-hidden="true">⌘</span>macOS
+            </button>
+            <button class="codex-clone-segment" type="button" data-format="linux" role="tab">
+              <span aria-hidden="true">&gt;_</span>Linux
+            </button>
+            <button class="codex-clone-segment is-active" type="button" data-format="windows" role="tab" aria-selected="true">
+              <span aria-hidden="true">⊞</span>Windows
+            </button>
+            <button class="codex-clone-segment" type="button" data-format="sub2api" role="tab">
+              <span aria-hidden="true">＋</span>Sub2API
+            </button>
+            <button class="codex-clone-segment" type="button" data-format="cpa" role="tab">
+              <span aria-hidden="true">⚿</span>CPA
+            </button>
+            <button class="codex-clone-segment" type="button" data-format="cockpit" role="tab">
+              <span aria-hidden="true">⌁</span>Cockpit
+            </button>
+          </div>
+        </div>
+
+        <div class="codex-clone-section">
+          <div class="codex-clone-output-title">
+            <span>配置内容</span>
+          </div>
+          <pre class="codex-clone-output is-empty" id="configOutput"><code>粘贴 Session 后生成配置内容</code></pre>
+        </div>
+
+        <div class="codex-clone-actions">
+          <button class="codex-clone-primary" id="copyButton" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M8 8h10v12H8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+              <path d="M6 16H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            复制配置内容
+          </button>
+        </div>
+        <p class="codex-clone-status" id="copyStatus" aria-live="polite">选择格式后，可复制配置命令或 JSON 内容。</p>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const textarea = document.querySelector("#codex-session");
+    const output = document.querySelector("#configOutput");
+    const copyButton = document.querySelector("#copyButton");
+    const copyStatus = document.querySelector("#copyStatus");
+    const sessionHelp = document.querySelector("#sessionHelp");
+    const guideButton = document.querySelector("#guideButton");
+    const guideBox = document.querySelector("#guideBox");
+    const segmentButtons = [...document.querySelectorAll(".codex-clone-segment")];
+    let activeFormat = "windows";
+    let currentConfig = "";
+
+    function sessionToken() {
+      const raw = textarea.value.trim();
+      if (!raw) return "";
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed.accessToken || parsed.access_token || parsed.token || raw;
+      } catch {
+        return raw;
+      }
+    }
+
+    function buildConfig(token, format) {
+      const json = JSON.stringify({
+        OPENAI_API_KEY: token,
+        OPENAI_BASE_URL: "https://api.openai.com/v1"
+      }, null, 2);
+
+      const configs = {
+        macos: `mkdir -p ~/.codex\ncat > ~/.codex/auth.json <<'EOF'\n${json}\nEOF`,
+        linux: `mkdir -p ~/.codex\ncat > ~/.codex/auth.json <<'EOF'\n${json}\nEOF`,
+        windows: `New-Item -ItemType Directory -Force $env:USERPROFILE\\.codex | Out-Null\n@'\n${json}\n'@ | Set-Content -Encoding UTF8 $env:USERPROFILE\\.codex\\auth.json`,
+        sub2api: JSON.stringify({ provider: "openai", token, base_url: "https://api.openai.com/v1" }, null, 2),
+        cpa: JSON.stringify({ type: "codex", credential: token }, null, 2),
+        cockpit: JSON.stringify({ name: "Codex", auth: { token } }, null, 2)
+      };
+      return configs[format];
+    }
+
+    function render() {
+      const token = sessionToken();
+      currentConfig = token ? buildConfig(token, activeFormat) : "";
+      output.textContent = currentConfig || "粘贴 Session 后生成配置内容";
+      output.classList.toggle("is-empty", !currentConfig);
+      copyButton.disabled = !currentConfig;
+      sessionHelp.textContent = token ? "已识别 Session，可复制生成的配置内容。" : "纯本地执行，不会上传任何数据";
+      copyStatus.textContent = currentConfig ? "配置内容已生成。" : "选择格式后，可复制配置命令或 JSON 内容。";
+    }
+
+    textarea.addEventListener("input", render);
+    segmentButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        activeFormat = button.dataset.format;
+        segmentButtons.forEach((item) => {
+          const selected = item === button;
+          item.classList.toggle("is-active", selected);
+          item.setAttribute("aria-selected", String(selected));
+        });
+        render();
+      });
+    });
+
+    guideButton.addEventListener("click", () => {
+      const expanded = guideButton.getAttribute("aria-expanded") === "true";
+      guideButton.setAttribute("aria-expanded", String(!expanded));
+      guideBox.hidden = expanded;
+    });
+
+    copyButton.addEventListener("click", async () => {
+      if (!currentConfig) return;
+      await navigator.clipboard.writeText(currentConfig);
+      copyStatus.textContent = "配置内容已复制。";
+    });
+
+    render();
+  </script>
+</body>
+</html>

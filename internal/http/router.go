@@ -70,6 +70,7 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	protected.GET("/account/password", handler.ChangePassword)
 	protected.POST("/account/password", handler.ChangePasswordPost)
 	protected.GET("/tools/image-splitter", handler.ImageSplitter)
+	protected.GET("/tools/codex-auth", handler.CodexAuth)
 	protected.GET("/foods/:id/images", handler.FoodImages)
 	protected.POST("/foods/:id/images/generate", handler.GenerateFoodImages)
 	protected.POST("/foods/:id/images/upload", handler.UploadFoodImage)

@@ -165,6 +165,12 @@ func (h Handler) ImageSplitter(c *gin.Context) {
 	})
 }
 
+func (h Handler) CodexAuth(c *gin.Context) {
+	c.HTML(http.StatusOK, "codex_auth.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+	})
+}
+
 func (h Handler) FoodImages(c *gin.Context) {
 	id, ok := pathID(c)
 	if !ok {
