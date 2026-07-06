@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS app_users (
 
 CREATE TABLE IF NOT EXISTS t_medicated_food (
     id BIGINT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT '药食同源',
     name TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT '',
     food TEXT NOT NULL DEFAULT '',

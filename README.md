@@ -41,7 +41,7 @@ ai:
   api_key_env: OPENAI_API_KEY
   model: gpt-image-1
   image_count: 4
-  size: 720x1280
+  size: 1080x1920
   quality: medium
   output_format: png
   output_dir: generated
@@ -56,6 +56,7 @@ You can also set `api_key` directly in YAML. When both are present, `api_key` ta
 - `GET /login` renders the login page.
 - `GET /` renders the embedded HTML page after login.
 - `GET /tools/image-splitter` opens the local image splitting tool.
+- `GET /foods/new` opens the formula creation page.
 - `GET /foods/:id/images` opens the formula image generation page.
 - `POST /foods/:id/images/generate` generates formula introduction images.
 - `GET /healthz` checks PostgreSQL and Redis.
@@ -83,6 +84,7 @@ If the account cannot create tables, create the table with a privileged account 
 ```sql
 CREATE TABLE IF NOT EXISTS t_medicated_food (
     id BIGINT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT '药食同源',
     name TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT '',
     food TEXT NOT NULL DEFAULT '',

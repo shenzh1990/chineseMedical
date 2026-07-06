@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"chinese-medical/internal/ai"
+	"chinese-medical/internal/model"
 	"chinese-medical/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,16 @@ type Handler struct {
 	foods     repository.MedicatedFoodRepository
 	users     repository.UserRepository
 	generator ai.ImageGenerator
+}
+
+type medicatedFoodForm struct {
+	ID       string
+	Category string
+	Name     string
+	Source   string
+	Food     string
+	Method   string
+	Effect   string
 }
 
 func (h Handler) Login(c *gin.Context) {
@@ -111,9 +122,25 @@ func (h Handler) Index(c *gin.Context) {
 		limit = 48
 	}
 	query := c.Query("q")
+	category := strings.TrimSpace(c.Query("category"))
 	offset := (page - 1) * limit
 
-	items, total, err := h.foods.List(ctx, query, limit, offset)
+	categories, err := h.foods.Categories(ctx)
+	if err != nil {
+		h.deps.Logger.Error("list medicated food categories", "error", err)
+		c.HTML(http.StatusInternalServerError, "index.html", gin.H{
+			"AppName": h.deps.Config.AppName,
+			"Env":     h.deps.Config.Env,
+			"Error":   "类别读取失败，请先执行 SQL 同步或检查数据库连接。",
+		})
+		return
+	}
+	var categoryTotal int64
+	for _, item := range categories {
+		categoryTotal += item.Count
+	}
+
+	items, total, err := h.foods.List(ctx, query, category, limit, offset)
 	if err != nil {
 		h.deps.Logger.Error("list medicated foods", "error", err)
 		c.HTML(http.StatusInternalServerError, "index.html", gin.H{
@@ -131,7 +158,7 @@ func (h Handler) Index(c *gin.Context) {
 	if totalPages > 0 && page > totalPages {
 		page = totalPages
 		offset = (page - 1) * limit
-		items, total, err = h.foods.List(ctx, query, limit, offset)
+		items, total, err = h.foods.List(ctx, query, category, limit, offset)
 		if err != nil {
 			h.deps.Logger.Error("list medicated foods", "error", err)
 			c.HTML(http.StatusInternalServerError, "index.html", gin.H{
@@ -144,18 +171,21 @@ func (h Handler) Index(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"AppName":    h.deps.Config.AppName,
-		"Env":        h.deps.Config.Env,
-		"Foods":      items,
-		"Total":      total,
-		"Query":      query,
-		"Page":       page,
-		"Limit":      limit,
-		"TotalPages": totalPages,
-		"HasPrev":    page > 1,
-		"HasNext":    int64(offset+len(items)) < total,
-		"PrevPage":   page - 1,
-		"NextPage":   page + 1,
+		"AppName":       h.deps.Config.AppName,
+		"Env":           h.deps.Config.Env,
+		"Foods":         items,
+		"Categories":    categories,
+		"Category":      category,
+		"CategoryTotal": categoryTotal,
+		"Total":         total,
+		"Query":         query,
+		"Page":          page,
+		"Limit":         limit,
+		"TotalPages":    totalPages,
+		"HasPrev":       page > 1,
+		"HasNext":       int64(offset+len(items)) < total,
+		"PrevPage":      page - 1,
+		"NextPage":      page + 1,
 	})
 }
 
@@ -165,9 +195,65 @@ func (h Handler) ImageSplitter(c *gin.Context) {
 	})
 }
 
-func (h Handler) CodexAuth(c *gin.Context) {
-	c.HTML(http.StatusOK, "codex_auth.html", gin.H{
-		"AppName": h.deps.Config.AppName,
+func (h Handler) NewFood(c *gin.Context) {
+	h.renderFoodForm(c, http.StatusOK, "", medicatedFoodForm{
+		Category: model.DefaultFoodCategory,
+	})
+}
+
+func (h Handler) CreateFood(c *gin.Context) {
+	form := medicatedFoodForm{
+		ID:       strings.TrimSpace(c.PostForm("id")),
+		Category: model.NormalizeFoodCategory(c.PostForm("category")),
+		Name:     strings.TrimSpace(c.PostForm("name")),
+		Source:   strings.TrimSpace(c.PostForm("source")),
+		Food:     strings.TrimSpace(c.PostForm("food")),
+		Method:   strings.TrimSpace(c.PostForm("method")),
+		Effect:   strings.TrimSpace(c.PostForm("effect")),
+	}
+
+	if form.Name == "" {
+		h.renderFoodForm(c, http.StatusBadRequest, "请填写名称。", form)
+		return
+	}
+
+	var id int64
+	if form.ID != "" {
+		parsedID, err := strconv.ParseInt(form.ID, 10, 64)
+		if err != nil || parsedID <= 0 {
+			h.renderFoodForm(c, http.StatusBadRequest, "ID 必须是大于 0 的数字。", form)
+			return
+		}
+		id = parsedID
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	item, err := h.foods.Create(ctx, model.MedicatedFood{
+		ID:       id,
+		Category: form.Category,
+		Name:     form.Name,
+		Source:   form.Source,
+		Food:     form.Food,
+		Method:   form.Method,
+		Effect:   form.Effect,
+	})
+	if err != nil {
+		h.deps.Logger.Warn("create medicated food", "error", err)
+		h.renderFoodForm(c, http.StatusInternalServerError, userFacingCreateFoodError(err), form)
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(item.ID, 10)+"/images?created=1")
+}
+
+func (h Handler) renderFoodForm(c *gin.Context, status int, message string, form medicatedFoodForm) {
+	c.HTML(status, "food_new.html", gin.H{
+		"AppName":    h.deps.Config.AppName,
+		"Error":      message,
+		"Form":       form,
+		"Categories": model.FoodCategoryOptions(),
 	})
 }
 
@@ -204,6 +290,7 @@ func (h Handler) FoodImages(c *gin.Context) {
 		"BaseURL":    h.deps.Config.AI.BaseURL,
 		"Prompt":     h.generator.Prompt(item),
 		"Error":      c.Query("error"),
+		"Created":    c.Query("created") == "1",
 		"Generated":  c.Query("generated") == "1",
 		"Uploaded":   c.Query("uploaded") == "1",
 	})
@@ -327,6 +414,16 @@ func userFacingUploadError(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func userFacingCreateFoodError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.Contains(err.Error(), "duplicate key") {
+		return "这个 ID 已存在，请更换 ID 或留空自动生成。"
+	}
+	return "保存失败：" + err.Error()
 }
 
 func positiveQueryInt(c *gin.Context, key string, fallback int) int {

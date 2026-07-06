@@ -17,6 +17,7 @@ import (
 const medicatedFoodSchema = `
 CREATE TABLE IF NOT EXISTS t_medicated_food (
     id BIGINT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT '药食同源',
     name TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT '',
     food TEXT NOT NULL DEFAULT '',
@@ -52,19 +53,24 @@ func SyncMedicatedFoodSQL(ctx context.Context, db *pgxpool.Pool, path string) (i
 			return 0, fmt.Errorf("create t_medicated_food: %w", err)
 		}
 	}
+	if err := ensureMedicatedFoodCategory(ctx, tx); err != nil {
+		return 0, err
+	}
 
 	batch := &pgx.Batch{}
 	for _, item := range items {
+		item.Category = model.NormalizeFoodCategory(item.Category)
 		batch.Queue(`
-			INSERT INTO t_medicated_food (id, name, source, food, method, effect)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO t_medicated_food (id, category, name, source, food, method, effect)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (id) DO UPDATE SET
+				category = EXCLUDED.category,
 				name = EXCLUDED.name,
 				source = EXCLUDED.source,
 				food = EXCLUDED.food,
 				method = EXCLUDED.method,
 				effect = EXCLUDED.effect
-		`, item.ID, item.Name, item.Source, item.Food, item.Method, item.Effect)
+		`, item.ID, item.Category, item.Name, item.Source, item.Food, item.Method, item.Effect)
 	}
 
 	results := tx.SendBatch(ctx, batch)
@@ -100,6 +106,23 @@ func medicatedFoodTableExists(ctx context.Context, tx pgx.Tx) (bool, error) {
 	return exists, nil
 }
 
+func ensureMedicatedFoodCategory(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `
+		ALTER TABLE t_medicated_food
+		ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '药食同源'
+	`); err != nil {
+		return fmt.Errorf("add medicated food category: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE t_medicated_food
+		SET category = $1
+		WHERE category IS NULL OR btrim(category) = ''
+	`, model.DefaultFoodCategory); err != nil {
+		return fmt.Errorf("backfill medicated food category: %w", err)
+	}
+	return nil
+}
+
 func ParseMedicatedFoodSQL(path string) ([]model.MedicatedFood, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -133,12 +156,13 @@ func ParseMedicatedFoodSQL(path string) ([]model.MedicatedFood, error) {
 		}
 
 		items = append(items, model.MedicatedFood{
-			ID:     id,
-			Name:   fields[1],
-			Source: fields[2],
-			Food:   fields[3],
-			Method: fields[4],
-			Effect: fields[5],
+			ID:       id,
+			Category: model.DefaultFoodCategory,
+			Name:     fields[1],
+			Source:   fields[2],
+			Food:     fields[3],
+			Method:   fields[4],
+			Effect:   fields[5],
 		})
 	}
 	if err := scanner.Err(); err != nil {

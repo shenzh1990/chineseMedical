@@ -52,16 +52,19 @@ func SyncPatentFoodHTML(ctx context.Context, db *pgxpool.Pool, path string) (Pat
 			return PatentFoodSyncResult{}, fmt.Errorf("create t_medicated_food: %w", err)
 		}
 	}
+	if err := ensureMedicatedFoodCategory(ctx, tx); err != nil {
+		return PatentFoodSyncResult{}, err
+	}
 
 	result := PatentFoodSyncResult{Parsed: len(items)}
 	for _, item := range items {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO t_medicated_food (id, name, source, food, method, effect)
-			SELECT COALESCE((SELECT MAX(id) FROM t_medicated_food), 0) + 1, $1, $2, $3, $4, $5
+			INSERT INTO t_medicated_food (id, category, name, source, food, method, effect)
+			SELECT COALESCE((SELECT MAX(id) FROM t_medicated_food), 0) + 1, $1, $2, $3, $4, $5, $6
 			WHERE NOT EXISTS (
-				SELECT 1 FROM t_medicated_food WHERE name = $1
+				SELECT 1 FROM t_medicated_food WHERE name = $2
 			)
-		`, item.Name, formatPatentFoodSource(item), item.Food, item.Method, item.Effect)
+		`, model.DefaultFoodCategory, item.Name, formatPatentFoodSource(item), item.Food, item.Method, item.Effect)
 		if err != nil {
 			return PatentFoodSyncResult{}, fmt.Errorf("insert patent food %q: %w", item.Name, err)
 		}

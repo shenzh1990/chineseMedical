@@ -21,6 +21,9 @@
     {{ if .Error }}
       <section class="notice error">{{ .Error }}</section>
     {{ end }}
+    {{ if .Created }}
+      <section class="notice success">调理方已新增。</section>
+    {{ end }}
     {{ if .Generated }}
       <section class="notice success">介绍图已生成。</section>
     {{ end }}
@@ -32,7 +35,10 @@
       <section class="detail-layout">
         <article class="food-card detail-card">
           <div class="card-head">
-            <span>#{{ .Food.ID }}</span>
+            <div>
+              <span>#{{ .Food.ID }}</span>
+              <span class="category-badge">{{ .Food.Category }}</span>
+            </div>
             <h2>{{ .Food.Name }}</h2>
           </div>
           <dl>

@@ -310,11 +310,12 @@ func buildPrompt(count int, item model.MedicatedFood) string {
 	if count <= 0 {
 		count = 4
 	}
-	return fmt.Sprintf(`为中医药食同源调理方“%s”生成 %d 张连贯的中文方剂介绍图。
+	category := model.NormalizeFoodCategory(item.Category)
+	return fmt.Sprintf(`为中医“%s”类别下的调理方“%s”生成 %d 张连贯的中文方剂介绍图。
 
 主要应用场景：
 - 图片主要用于手机竖屏浏览，请按竖版海报设计。
-- 每张图的画面比例为 9:16，目标分辨率为 720x1280 px。
+- 每张图的画面比例为 9:16，目标分辨率为 1080x1920 px。
 - 重要标题、序号和正文需要在手机屏幕上清晰可读，避免过小文字。
 - 内容需要适合在移动端网页中连续上下滑动查看，留出安全边距，不要把文字贴近边缘。
 
@@ -324,15 +325,16 @@ func buildPrompt(count int, item model.MedicatedFood) string {
 - 这 %d 张独立图片要像同一套科普海报系列：统一配色、统一字体层级、统一版式语言。
 - 风格清雅、专业、适合网页展示；不要出现夸大疗效承诺、医生肖像、医院背书、处方笺或药品广告语。
 - 每张图都需要有清晰中文标题“%s”，并带序号，例如 1/%d、2/%d。
-- 文案要简洁，不要堆满小字；信息准确来自下面字段。
+- 文案要简洁，不要堆满小字；信息准确来自下面字段，可以在不改变原意、不添加未经证实疗效的前提下适当扩展表达，让画面内容更自然完整。
 
 请把内容自然分配到多张图：
-1. 来源：%s
-2. 组成：%s
-3. 制法：%s
-4. 功效：%s
+1. 类别：%s
+2. 来源：%s
+3. 组成：%s
+4. 制法：%s
+5. 功效：%s
 
-如果某个字段为空，请用“未注明”自然表达。`, item.Name, count, count, count, item.Name, count, count, promptTextOrUnknown(item.Source), promptTextOrUnknown(item.Food), promptTextOrUnknown(item.Method), promptTextOrUnknown(item.Effect))
+如果某个字段为空，请用“未注明”自然表达。`, category, item.Name, count, count, count, item.Name, count, count, category, promptTextOrUnknown(item.Source), promptTextOrUnknown(item.Food), promptTextOrUnknown(item.Method), promptTextOrUnknown(item.Effect))
 }
 
 func promptTextOrUnknown(value string) string {

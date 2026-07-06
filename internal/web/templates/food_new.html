@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新增调理方 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Medicated Food</p>
+        <h1>新增调理方</h1>
+      </div>
+      <nav class="actions">
+        <a href="/">返回列表</a>
+      </nav>
+    </header>
+
+    {{ if .Error }}
+      <section class="notice error">{{ .Error }}</section>
+    {{ end }}
+
+    <section class="form-panel">
+      <form class="food-form" method="post" action="/foods">
+        <div class="form-row two-columns">
+          <label>
+            <span class="label">类别</span>
+            <select name="category">
+              {{ range .Categories }}
+                <option value="{{ . }}" {{ if eq $.Form.Category . }}selected{{ end }}>{{ . }}</option>
+              {{ end }}
+            </select>
+          </label>
+          <label>
+            <span class="label">ID</span>
+            <input name="id" type="number" min="1" value="{{ .Form.ID }}" placeholder="留空自动生成">
+          </label>
+        </div>
+        <div class="form-row">
+          <label>
+            <span class="label">名称</span>
+            <input name="name" value="{{ .Form.Name }}" maxlength="200" required autofocus>
+          </label>
+        </div>
+        <label>
+          <span class="label">来源</span>
+          <input name="source" value="{{ .Form.Source }}" maxlength="500">
+        </label>
+        <label>
+          <span class="label">组成</span>
+          <textarea name="food" rows="4">{{ .Form.Food }}</textarea>
+        </label>
+        <label>
+          <span class="label">制法</span>
+          <textarea name="method" rows="4">{{ .Form.Method }}</textarea>
+        </label>
+        <label>
+          <span class="label">功效</span>
+          <textarea name="effect" rows="4">{{ .Form.Effect }}</textarea>
+        </label>
+        <div class="form-actions">
+          <a href="/">取消</a>
+          <button type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

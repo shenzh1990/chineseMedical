@@ -14,7 +14,7 @@
         <h1>{{ .AppName }}</h1>
       </div>
       <nav class="actions">
-        <a href="/tools/codex-auth">Codex Auth</a>
+        <a href="/foods/new">新增调理方</a>
         <a href="/tools/image-splitter">图片分割</a>
         <a href="/account/password">修改密码</a>
         <a href="/healthz">Health Check</a>
@@ -37,19 +37,38 @@
     </section>
 
     <form class="search" method="get" action="/">
+      <input type="hidden" name="category" value="{{ .Category }}">
       <input name="q" value="{{ .Query }}" placeholder="搜索名称、来源、食材或功效">
       <button type="submit">搜索</button>
-      {{ if .Query }}<a href="/">清除</a>{{ end }}
+      {{ if .Query }}<a href="/?category={{ urlquery .Category }}">清除</a>{{ end }}
     </form>
 
     {{ if .Error }}
       <section class="empty">{{ .Error }}</section>
-    {{ else if .Foods }}
+    {{ else }}
+      <nav class="category-tabs" aria-label="类别筛选">
+        <a class="{{ if not .Category }}is-active{{ end }}" href="/?q={{ urlquery .Query }}">
+          <strong>全部</strong>
+          <span>{{ .CategoryTotal }}</span>
+        </a>
+        {{ range .Categories }}
+          <a class="{{ if eq $.Category .Name }}is-active{{ end }}" href="/?category={{ urlquery .Name }}&q={{ urlquery $.Query }}">
+            <strong>{{ .Name }}</strong>
+            <span>{{ .Count }}</span>
+          </a>
+        {{ end }}
+      </nav>
+    {{ end }}
+
+    {{ if and (not .Error) .Foods }}
       <section class="grid">
         {{ range .Foods }}
           <article class="food-card">
             <div class="card-head">
-              <span>#{{ .ID }}</span>
+              <div>
+                <span>#{{ .ID }}</span>
+                <span class="category-badge">{{ .Category }}</span>
+              </div>
               <h2>{{ .Name }}</h2>
             </div>
             <dl>
@@ -78,18 +97,19 @@
       </section>
 
       <nav class="pager">
-        {{ if .HasPrev }}<a href="/?q={{ urlquery .Query }}&page={{ .PrevPage }}&limit={{ .Limit }}">上一页</a>{{ else }}<span>上一页</span>{{ end }}
+        {{ if .HasPrev }}<a href="/?category={{ urlquery .Category }}&q={{ urlquery .Query }}&page={{ .PrevPage }}&limit={{ .Limit }}">上一页</a>{{ else }}<span>上一页</span>{{ end }}
         <strong>第 {{ .Page }} / {{ .TotalPages }} 页</strong>
         <form class="page-jump" method="get" action="/">
+          <input type="hidden" name="category" value="{{ .Category }}">
           <input type="hidden" name="q" value="{{ .Query }}">
           <input type="hidden" name="limit" value="{{ .Limit }}">
           <label for="page-jump">跳转到</label>
           <input id="page-jump" type="number" name="page" min="1" max="{{ .TotalPages }}" value="{{ .Page }}">
           <button type="submit">GO</button>
         </form>
-        {{ if .HasNext }}<a href="/?q={{ urlquery .Query }}&page={{ .NextPage }}&limit={{ .Limit }}">下一页</a>{{ else }}<span>下一页</span>{{ end }}
+        {{ if .HasNext }}<a href="/?category={{ urlquery .Category }}&q={{ urlquery .Query }}&page={{ .NextPage }}&limit={{ .Limit }}">下一页</a>{{ else }}<span>下一页</span>{{ end }}
       </nav>
-    {{ else }}
+    {{ else if not .Error }}
       <section class="empty">暂无数据，请先执行 SQL 同步。</section>
     {{ end }}
   </main>
