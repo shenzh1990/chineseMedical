@@ -7,10 +7,12 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <main class="shell">
+  <div class="admin-layout">
+    {{ template "admin_sidebar" . }}
+  <main class="content-shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">AI Settings</p>
+        <p class="eyebrow">系统管理</p>
         <h1>大模型设置</h1>
       </div>
       <nav class="actions">
@@ -139,5 +141,6 @@
       </form>
     </section>
   </main>
+  </div>
 </body>
 </html>

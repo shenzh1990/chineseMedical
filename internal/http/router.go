@@ -56,6 +56,7 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	handler := Handler{
 		deps:       deps,
 		foods:      repository.NewMedicatedFoodRepository(deps.DB),
+		renshu:     repository.NewRenShuDataRepository(deps.DB),
 		users:      repository.NewUserRepository(deps.DB),
 		aiSettings: ai.NewSettingsStore(deps.Config.AI),
 	}
@@ -67,9 +68,12 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	protected := router.Group("/")
 	protected.Use(handler.requireAuth())
 	protected.GET("/", handler.Index)
+	protected.GET("/renshu/data", handler.RenShuData)
 	protected.GET("/account/password", handler.ChangePassword)
 	protected.POST("/account/password", handler.ChangePasswordPost)
 	protected.GET("/tools/image-splitter", handler.ImageSplitter)
+	protected.GET("/tcm/questions", handler.TCMQuestions)
+	protected.POST("/tcm/questions/ask", handler.AskTCMQuestion)
 	protected.GET("/settings/ai", handler.AISettings)
 	protected.POST("/settings/ai", handler.SaveAISettings)
 	protected.POST("/settings/ai/test", handler.TestAISettings)

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RenShu 基础数据 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="admin-layout">
+    {{ template "admin_sidebar" . }}
+  <main class="content-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">知识库管理</p>
+        <h1>RenShu 基础数据</h1>
+      </div>
+      <nav class="actions">
+        <a href="/">返回知识库</a>
+      </nav>
+    </header>
+
+    <section class="summary">
+      <div>
+        <span class="label">数据集</span>
+        <strong>{{ len .Datasets }}</strong>
+      </div>
+      <div>
+        <span class="label">记录总数</span>
+        <strong>{{ .TotalRows }}</strong>
+      </div>
+    </section>
+
+    {{ if .Error }}
+      <section class="notice error">{{ .Error }}</section>
+    {{ else }}
+      <nav class="dataset-tabs" aria-label="RenShu 数据集">
+        {{ range .Summaries }}
+          <a class="{{ if eq $.SelectedDataset.Key .Key }}is-active{{ end }}" href="/renshu/data?dataset={{ urlquery .Key }}&q={{ urlquery $.Query }}">
+            <strong>{{ .Name }}</strong>
+            <span>{{ .Count }}</span>
+          </a>
+        {{ end }}
+      </nav>
+
+      <section class="dataset-head">
+        <div>
+          <span class="label">当前数据集</span>
+          <h2>{{ .SelectedDataset.Name }}</h2>
+          <p>{{ .SelectedDataset.Description }}</p>
+        </div>
+        <strong>{{ .Total }} 条</strong>
+      </section>
+
+      <form class="search" method="get" action="/renshu/data">
+        <input type="hidden" name="dataset" value="{{ .SelectedDataset.Key }}">
+        <input name="q" value="{{ .Query }}" placeholder="搜索当前数据集">
+        <button type="submit">搜索</button>
+        {{ if .Query }}<a href="/renshu/data?dataset={{ urlquery .SelectedDataset.Key }}">清除</a>{{ end }}
+      </form>
+
+      {{ if .Rows }}
+        <section class="data-table-wrap" aria-label="{{ .SelectedDataset.Name }}">
+          <table class="data-table">
+            <thead>
+              <tr>
+                {{ range .SelectedDataset.Columns }}
+                  <th>{{ .Label }}</th>
+                {{ end }}
+              </tr>
+            </thead>
+            <tbody>
+              {{ range .Rows }}
+                <tr>
+                  {{ $row := . }}
+                  {{ range $.SelectedDataset.Columns }}
+                    <td>{{ with index $row .Key }}{{ . }}{{ else }}未注明{{ end }}</td>
+                  {{ end }}
+                </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </section>
+
+        <nav class="pager">
+          {{ if .HasPrev }}<a href="/renshu/data?dataset={{ urlquery .SelectedDataset.Key }}&q={{ urlquery .Query }}&page={{ .PrevPage }}&limit={{ .Limit }}">上一页</a>{{ else }}<span>上一页</span>{{ end }}
+          <strong>第 {{ .Page }} / {{ .TotalPages }} 页</strong>
+          <form class="page-jump" method="get" action="/renshu/data">
+            <input type="hidden" name="dataset" value="{{ .SelectedDataset.Key }}">
+            <input type="hidden" name="q" value="{{ .Query }}">
+            <input type="hidden" name="limit" value="{{ .Limit }}">
+            <label for="renshu-page-jump">跳转到</label>
+            <input id="renshu-page-jump" type="number" name="page" min="1" max="{{ .TotalPages }}" value="{{ .Page }}">
+            <button type="submit">GO</button>
+          </form>
+          {{ if .HasNext }}<a href="/renshu/data?dataset={{ urlquery .SelectedDataset.Key }}&q={{ urlquery .Query }}&page={{ .NextPage }}&limit={{ .Limit }}">下一页</a>{{ else }}<span>下一页</span>{{ end }}
+        </nav>
+      {{ else }}
+        <section class="empty">
+          {{ if .Query }}当前数据集没有匹配“{{ .Query }}”的记录。{{ else }}当前数据集暂无记录。{{ end }}
+        </section>
+      {{ end }}
+    {{ end }}
+  </main>
+  </div>
+</body>
+</html>

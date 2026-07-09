@@ -7,10 +7,12 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <main class="shell">
+  <div class="admin-layout">
+    {{ template "admin_sidebar" . }}
+  <main class="content-shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">Formula Image Studio</p>
+        <p class="eyebrow">知识库管理</p>
         <h1>{{ if .Food }}{{ .Food.Name }}{{ else }}调理方介绍图{{ end }}</h1>
       </div>
       <nav class="actions">
@@ -107,6 +109,7 @@
       {{ end }}
     {{ end }}
   </main>
+  </div>
   <script>
     const foodImageUpload = document.getElementById("foodImageUpload");
     const foodImageUploadMeta = document.getElementById("foodImageUploadMeta");

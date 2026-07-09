@@ -22,6 +22,7 @@ import (
 type Handler struct {
 	deps       Dependencies
 	foods      repository.MedicatedFoodRepository
+	renshu     repository.RenShuDataRepository
 	users      repository.UserRepository
 	aiSettings *ai.SettingsStore
 }
@@ -40,6 +41,12 @@ type foodResearchRequest struct {
 	Name      string `json:"name"`
 	Category  string `json:"category"`
 	SourceURL string `json:"source_url"`
+}
+
+type tcmQuestionRequest struct {
+	Question string              `json:"question"`
+	Mode     string              `json:"mode"`
+	History  []ai.TCMChatMessage `json:"history"`
 }
 
 type aiSettingsForm struct {
@@ -98,6 +105,7 @@ func (h Handler) Logout(c *gin.Context) {
 func (h Handler) ChangePassword(c *gin.Context) {
 	c.HTML(http.StatusOK, "change_password.html", gin.H{
 		"AppName": h.deps.Config.AppName,
+		"Active":  "account",
 		"Error":   c.Query("error"),
 		"Updated": c.Query("updated") == "1",
 	})
@@ -161,6 +169,7 @@ func (h Handler) Index(c *gin.Context) {
 		h.deps.Logger.Error("list medicated food categories", "error", err)
 		c.HTML(http.StatusInternalServerError, "index.html", gin.H{
 			"AppName": h.deps.Config.AppName,
+			"Active":  "knowledge",
 			"Env":     h.deps.Config.Env,
 			"Error":   "类别读取失败，请先执行 SQL 同步或检查数据库连接。",
 		})
@@ -176,6 +185,7 @@ func (h Handler) Index(c *gin.Context) {
 		h.deps.Logger.Error("list medicated foods", "error", err)
 		c.HTML(http.StatusInternalServerError, "index.html", gin.H{
 			"AppName": h.deps.Config.AppName,
+			"Active":  "knowledge",
 			"Env":     h.deps.Config.Env,
 			"Error":   "数据读取失败，请先执行 SQL 同步或检查数据库连接。",
 		})
@@ -194,6 +204,7 @@ func (h Handler) Index(c *gin.Context) {
 			h.deps.Logger.Error("list medicated foods", "error", err)
 			c.HTML(http.StatusInternalServerError, "index.html", gin.H{
 				"AppName": h.deps.Config.AppName,
+				"Active":  "knowledge",
 				"Env":     h.deps.Config.Env,
 				"Error":   "数据读取失败，请先执行 SQL 同步或检查数据库连接。",
 			})
@@ -203,6 +214,7 @@ func (h Handler) Index(c *gin.Context) {
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"AppName":       h.deps.Config.AppName,
+		"Active":        "knowledge",
 		"Env":           h.deps.Config.Env,
 		"Foods":         items,
 		"Categories":    categories,
@@ -220,9 +232,154 @@ func (h Handler) Index(c *gin.Context) {
 	})
 }
 
+func (h Handler) RenShuData(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	datasetKey := strings.TrimSpace(c.Query("dataset"))
+	if datasetKey == "" {
+		datasetKey = "system_configs"
+	}
+	dataset, ok := repository.RenShuDatasetByKey(datasetKey)
+	if !ok {
+		c.Redirect(http.StatusSeeOther, "/renshu/data?dataset=system_configs")
+		return
+	}
+
+	page := positiveQueryInt(c, "page", 1)
+	limit := positiveQueryInt(c, "limit", 20)
+	if limit > 80 {
+		limit = 80
+	}
+	query := strings.TrimSpace(c.Query("q"))
+	offset := (page - 1) * limit
+
+	summaries, err := h.renshu.Summaries(ctx)
+	if err != nil {
+		h.deps.Logger.Error("summarize renshu data", "error", err)
+		h.renderRenShuDataError(c, "RenShu 基础表读取失败，请确认已执行导入命令。")
+		return
+	}
+
+	data, err := h.renshu.List(ctx, dataset, query, limit, offset)
+	if err != nil {
+		h.deps.Logger.Error("list renshu data", "dataset", dataset.Key, "error", err)
+		h.renderRenShuDataError(c, "当前数据集读取失败，请检查导入表结构是否完整。")
+		return
+	}
+
+	totalPages := 0
+	if data.Total > 0 {
+		totalPages = int((data.Total + int64(limit) - 1) / int64(limit))
+	}
+	if totalPages > 0 && page > totalPages {
+		page = totalPages
+		offset = (page - 1) * limit
+		data, err = h.renshu.List(ctx, dataset, query, limit, offset)
+		if err != nil {
+			h.deps.Logger.Error("list renshu data after page correction", "dataset", dataset.Key, "error", err)
+			h.renderRenShuDataError(c, "当前数据集读取失败，请检查导入表结构是否完整。")
+			return
+		}
+	}
+
+	totalRows := int64(0)
+	for _, summary := range summaries {
+		totalRows += summary.Count
+	}
+
+	c.HTML(http.StatusOK, "renshu_data.html", gin.H{
+		"AppName":         h.deps.Config.AppName,
+		"Active":          "renshu-data",
+		"Datasets":        repository.RenShuDatasets(),
+		"Summaries":       summaries,
+		"SelectedDataset": dataset,
+		"Rows":            data.Rows,
+		"Total":           data.Total,
+		"TotalRows":       totalRows,
+		"Query":           query,
+		"Page":            page,
+		"Limit":           limit,
+		"TotalPages":      totalPages,
+		"HasPrev":         page > 1,
+		"HasNext":         int64(offset+len(data.Rows)) < data.Total,
+		"PrevPage":        page - 1,
+		"NextPage":        page + 1,
+	})
+}
+
+func (h Handler) renderRenShuDataError(c *gin.Context, message string) {
+	c.HTML(http.StatusInternalServerError, "renshu_data.html", gin.H{
+		"AppName":         h.deps.Config.AppName,
+		"Active":          "renshu-data",
+		"Datasets":        repository.RenShuDatasets(),
+		"Summaries":       []repository.RenShuDatasetSummary{},
+		"SelectedDataset": repository.RenShuDataset{},
+		"Rows":            []map[string]string{},
+		"Total":           int64(0),
+		"TotalRows":       int64(0),
+		"Query":           "",
+		"Page":            1,
+		"Limit":           20,
+		"TotalPages":      0,
+		"Error":           message,
+	})
+}
+
 func (h Handler) ImageSplitter(c *gin.Context) {
 	c.HTML(http.StatusOK, "image_splitter.html", gin.H{
 		"AppName": h.deps.Config.AppName,
+		"Active":  "image-splitter",
+	})
+}
+
+func (h Handler) TCMQuestions(c *gin.Context) {
+	c.HTML(http.StatusOK, "tcm_questions.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+		"Active":  "tcm-questions",
+		"Model":   h.aiSettings.Config().ResearchModel,
+	})
+}
+
+func (h Handler) AskTCMQuestion(c *gin.Context) {
+	var req tcmQuestionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式不正确。"})
+		return
+	}
+
+	question := strings.TrimSpace(req.Question)
+	if question == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先输入问题。"})
+		return
+	}
+	if len([]rune(question)) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "问题过长，请控制在 1000 个字以内。"})
+		return
+	}
+
+	cfg := h.aiSettings.Config()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), cfg.ResearchTimeout)
+	defer cancel()
+
+	foods, _, err := h.foods.List(ctx, question, "", 5, 0)
+	if err != nil {
+		h.deps.Logger.Warn("search knowledge for tcm question", "error", err)
+		foods = nil
+	}
+
+	answer, err := ai.NewTCMAdvisor(cfg).Answer(ctx, question, req.Mode, req.History, foods)
+	if err != nil {
+		h.deps.Logger.Warn("answer tcm question", "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": userFacingResearchError(err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"answer":  answer.Answer,
+		"mode":    answer.Mode,
+		"intent":  answer.Intent,
+		"sources": foods,
 	})
 }
 
@@ -272,6 +429,7 @@ func (h Handler) TestAISettings(c *gin.Context) {
 func (h Handler) renderAISettings(c *gin.Context, status int, errorMessage, successMessage string, form aiSettingsForm) {
 	c.HTML(status, "ai_settings.html", gin.H{
 		"AppName": h.deps.Config.AppName,
+		"Active":  "ai-settings",
 		"Error":   errorMessage,
 		"Success": successMessage,
 		"Form":    form,
@@ -370,6 +528,7 @@ func (h Handler) CreateFood(c *gin.Context) {
 func (h Handler) renderFoodForm(c *gin.Context, status int, message string, form medicatedFoodForm) {
 	c.HTML(status, "food_new.html", gin.H{
 		"AppName":    h.deps.Config.AppName,
+		"Active":     "knowledge-new",
 		"Error":      message,
 		"Form":       form,
 		"Categories": model.FoodCategoryOptions(),
@@ -390,6 +549,7 @@ func (h Handler) FoodImages(c *gin.Context) {
 		h.deps.Logger.Warn("get medicated food", "id", id, "error", err)
 		c.HTML(http.StatusNotFound, "food_images.html", gin.H{
 			"AppName": h.deps.Config.AppName,
+			"Active":  "knowledge",
 			"Error":   "未找到这个调理方。",
 		})
 		return
@@ -404,6 +564,7 @@ func (h Handler) FoodImages(c *gin.Context) {
 
 	c.HTML(http.StatusOK, "food_images.html", gin.H{
 		"AppName":    h.deps.Config.AppName,
+		"Active":     "knowledge",
 		"Food":       item,
 		"Images":     images,
 		"ImageCount": cfg.ImageCount,

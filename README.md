@@ -67,6 +67,8 @@ After login, the same settings can be edited from the 大模型设置 page. The 
 - `GET /login` renders the login page.
 - `GET /` renders the embedded HTML page after login.
 - `GET /tools/image-splitter` opens the local image splitting tool.
+- `GET /tcm/questions` opens the TCM intelligent Q&A workspace.
+- `POST /tcm/questions/ask` answers a TCM question with optional local knowledge context.
 - `GET /settings/ai` opens model configuration and connection testing.
 - `GET /foods/new` opens the formula creation page.
 - `POST /foods/research` researches a formula name and returns draft fields for the creation page.

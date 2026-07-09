@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>中医智能问答 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="admin-layout">
+    {{ template "admin_sidebar" . }}
+  <main class="content-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">内容工具</p>
+        <h1>中医智能问答</h1>
+      </div>
+      <nav class="actions">
+        <a href="/settings/ai">模型设置</a>
+      </nav>
+    </header>
+
+    <section class="qa-layout">
+      <section class="qa-panel">
+        <div class="qa-toolbar">
+          <fieldset class="qa-modes">
+            <legend>问答模式</legend>
+            <label>
+              <input type="radio" name="qa_mode" value="auto" checked>
+              <span>自动识别</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="tcm-chat">
+              <span>中医闲聊</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="tcm-diagnose">
+              <span>辨证问诊</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="classics-search">
+              <span>古籍检索</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="case-reference">
+              <span>医案参考</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="herb-consult">
+              <span>药材咨询</span>
+            </label>
+            <label>
+              <input type="radio" name="qa_mode" value="image-analysis">
+              <span>图文解析</span>
+            </label>
+          </fieldset>
+          <button id="clearChat" type="button">清空对话</button>
+        </div>
+
+        <div id="chatThread" class="chat-thread" aria-live="polite">
+          <article class="chat-message assistant">
+            <strong>中医智能助手</strong>
+            <p>可以咨询中医基础知识、药食同源、日常养生和辨证问诊方向。涉及具体疾病和用药时，我会保持科普边界并提示就医。</p>
+          </article>
+        </div>
+
+        <form id="qaForm" class="qa-input">
+          <textarea id="questionInput" rows="4" placeholder="输入问题，例如：脾胃虚弱的人日常饮食要注意什么？" required></textarea>
+          <button type="submit">发送</button>
+        </form>
+      </section>
+
+      <aside class="qa-side-panel">
+        <span class="label">当前模型</span>
+        <strong>{{ .Model }}</strong>
+        <p>系统会先进行 6 类中医意图识别，再按场景策略生成回答。当前已接入本地知识库检索；GraphRAG、Neo4j、TCM-CV 会以能力状态提示降级。</p>
+
+        <span class="label">识别网络</span>
+        <div id="intentPanel" class="intent-panel">等待提问</div>
+
+        <span class="label">参考知识</span>
+        <div id="sourceList" class="qa-sources">暂无命中条目</div>
+      </aside>
+    </section>
+  </main>
+  </div>
+
+  <script>
+    const qaForm = document.getElementById("qaForm");
+    const questionInput = document.getElementById("questionInput");
+    const chatThread = document.getElementById("chatThread");
+    const clearChat = document.getElementById("clearChat");
+    const sourceList = document.getElementById("sourceList");
+    const intentPanel = document.getElementById("intentPanel");
+    const history = [];
+
+    function selectedMode() {
+      const checked = document.querySelector("input[name='qa_mode']:checked");
+      return checked ? checked.value : "auto";
+    }
+
+    function appendMessage(role, text) {
+      const message = document.createElement("article");
+      message.className = "chat-message " + role;
+      const title = document.createElement("strong");
+      title.textContent = role === "user" ? "用户" : "中医智能助手";
+      const body = document.createElement("p");
+      body.textContent = text;
+      message.append(title, body);
+      chatThread.appendChild(message);
+      chatThread.scrollTop = chatThread.scrollHeight;
+      return message;
+    }
+
+    function renderSources(items) {
+      sourceList.innerHTML = "";
+      if (!items || !items.length) {
+        sourceList.textContent = "暂无命中条目";
+        return;
+      }
+      items.forEach(item => {
+        const entry = document.createElement("a");
+        entry.href = "/foods/" + item.ID + "/images";
+        entry.textContent = "#" + item.ID + " " + item.Name;
+        sourceList.appendChild(entry);
+      });
+    }
+
+    function renderIntent(intent) {
+      intentPanel.innerHTML = "";
+      if (!intent) {
+        intentPanel.textContent = "等待提问";
+        return;
+      }
+      const rows = [
+        ["场景", intent.label || intent.type || "未识别"],
+        ["置信度", typeof intent.confidence === "number" ? Math.round(intent.confidence * 100) + "%" : "-"],
+        ["情绪", intent.emotion || "-"],
+        ["策略", intent.strategy || "-"],
+      ];
+      if (intent.missing_info && intent.missing_info.length) {
+        rows.push(["缺失信息", intent.missing_info.join("、")]);
+      }
+      if (intent.external_capability) {
+        rows.push(["能力状态", intent.external_capability]);
+      }
+      if (intent.cached_classics && intent.cached_classics.length) {
+        rows.push(["古籍缓存", intent.cached_classics.join("；")]);
+      }
+      rows.forEach(([label, value]) => {
+        const item = document.createElement("div");
+        const key = document.createElement("span");
+        const text = document.createElement("strong");
+        key.textContent = label;
+        text.textContent = value;
+        item.append(key, text);
+        intentPanel.appendChild(item);
+      });
+    }
+
+    clearChat.addEventListener("click", () => {
+      history.splice(0, history.length);
+      chatThread.innerHTML = "";
+      appendMessage("assistant", "对话已清空，可以开始新的中医智能问答。");
+      renderSources([]);
+      renderIntent(null);
+    });
+
+    qaForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const question = questionInput.value.trim();
+      if (!question) {
+        questionInput.focus();
+        return;
+      }
+
+      appendMessage("user", question);
+      history.push({ role: "user", content: question });
+      questionInput.value = "";
+      questionInput.disabled = true;
+      const pending = appendMessage("assistant", "正在分析问题并生成回答...");
+
+      try {
+        const response = await fetch("/tcm/questions/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question,
+            mode: selectedMode(),
+            history: history.slice(-8),
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "问答请求失败。");
+        }
+        pending.querySelector("p").textContent = payload.answer || "未返回回答。";
+        history.push({ role: "assistant", content: payload.answer || "" });
+        renderSources(payload.sources || []);
+        renderIntent(payload.intent);
+      } catch (error) {
+        pending.querySelector("p").textContent = error.message || "问答请求失败。";
+      } finally {
+        questionInput.disabled = false;
+        questionInput.focus();
+      }
+    });
+  </script>
+</body>
+</html>

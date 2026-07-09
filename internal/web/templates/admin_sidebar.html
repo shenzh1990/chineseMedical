@@ -1,0 +1,34 @@
+{{ define "admin_sidebar" }}
+<aside class="admin-sidebar">
+  <a class="sidebar-brand" href="/">
+    <span>中医知识库</span>
+    <strong>{{ .AppName }}</strong>
+  </a>
+
+  <nav class="sidebar-nav" aria-label="后台菜单">
+    <section>
+      <p>知识库管理</p>
+      <a class="{{ if eq .Active "knowledge" }}is-active{{ end }}" href="/">调理方知识库</a>
+      <a class="{{ if eq .Active "renshu-data" }}is-active{{ end }}" href="/renshu/data">RenShu 基础数据</a>
+      <a class="{{ if eq .Active "knowledge-new" }}is-active{{ end }}" href="/foods/new">新增知识条目</a>
+    </section>
+
+    <section>
+      <p>内容工具</p>
+      <a class="{{ if eq .Active "tcm-questions" }}is-active{{ end }}" href="/tcm/questions">中医智能问答</a>
+      <a class="{{ if eq .Active "image-splitter" }}is-active{{ end }}" href="/tools/image-splitter">图片分割</a>
+    </section>
+
+    <section>
+      <p>系统管理</p>
+      <a class="{{ if eq .Active "ai-settings" }}is-active{{ end }}" href="/settings/ai">大模型设置</a>
+      <a class="{{ if eq .Active "account" }}is-active{{ end }}" href="/account/password">账号安全</a>
+      <a href="/healthz" target="_blank" rel="noreferrer">系统健康</a>
+    </section>
+  </nav>
+
+  <form class="sidebar-logout" method="post" action="/logout">
+    <button type="submit">退出登录</button>
+  </form>
+</aside>
+{{ end }}
