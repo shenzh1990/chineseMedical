@@ -41,12 +41,20 @@
         <div class="form-row">
           <label>
             <span class="label">名称</span>
-            <input name="name" value="{{ .Form.Name }}" maxlength="200" required autofocus>
+            <span class="input-action">
+              <input name="name" value="{{ .Form.Name }}" maxlength="200" required autofocus>
+              <button type="button" id="research-food">AI 补全</button>
+            </span>
           </label>
         </div>
         <label>
+          <span class="label">网页地址（可选）</span>
+          <input name="source_url" type="url" placeholder="填写后 AI 只根据该网页整理；留空则自动搜索">
+        </label>
+        <div class="research-status" id="research-status" role="status" aria-live="polite"></div>
+        <label>
           <span class="label">来源</span>
-          <input name="source" value="{{ .Form.Source }}" maxlength="500">
+          <textarea name="source" rows="3">{{ .Form.Source }}</textarea>
         </label>
         <label>
           <span class="label">组成</span>
@@ -67,5 +75,70 @@
       </form>
     </section>
   </main>
+  <script>
+    const researchButton = document.querySelector("#research-food");
+    const researchStatus = document.querySelector("#research-status");
+    const foodForm = document.querySelector(".food-form");
+
+    function setResearchStatus(message, state) {
+      researchStatus.textContent = message;
+      researchStatus.dataset.state = state || "";
+    }
+
+    function setField(name, value) {
+      const field = foodForm.elements[name];
+      if (field && typeof value === "string") {
+        field.value = value;
+      }
+    }
+
+    researchButton.addEventListener("click", async () => {
+      const name = foodForm.elements.name.value.trim();
+      const category = foodForm.elements.category.value;
+      const sourceUrl = foodForm.elements.source_url.value.trim();
+      if (!name) {
+        setResearchStatus("请先填写名称。", "error");
+        foodForm.elements.name.focus();
+        return;
+      }
+      if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) {
+        setResearchStatus("网页地址必须以 http:// 或 https:// 开头。", "error");
+        foodForm.elements.source_url.focus();
+        return;
+      }
+
+      researchButton.disabled = true;
+      researchButton.textContent = "检索中";
+      setResearchStatus(sourceUrl ? "正在读取该网页并整理字段..." : "正在检索网页并整理字段...", "loading");
+
+      try {
+        const response = await fetch("/foods/research", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ name, category, source_url: sourceUrl }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "资料检索失败。");
+        }
+
+        const food = payload.food || {};
+        setField("category", food.category || category);
+        setField("name", food.name || name);
+        setField("source", food.source || "");
+        setField("food", food.food || "");
+        setField("method", food.method || "");
+        setField("effect", food.effect || "");
+        setResearchStatus("已根据检索结果填充字段，请核对后保存。", "success");
+      } catch (error) {
+        setResearchStatus(error.message || "资料检索失败。", "error");
+      } finally {
+        researchButton.disabled = false;
+        researchButton.textContent = "AI 补全";
+      }
+    });
+  </script>
 </body>
 </html>

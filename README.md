@@ -41,22 +41,35 @@ ai:
   api_key_env: OPENAI_API_KEY
   model: gpt-image-1
   image_count: 4
-  size: 1080x1920
+  size: 720x1280
   quality: medium
   output_format: png
   output_dir: generated
-  timeout: 120s
+  timeout: 240s
+  research_base_url: https://api.openai.com/v1
+  research_endpoint_path: /responses
+  research_api_key: ""
+  research_api_key_env: OPENAI_API_KEY
+  research_model: gpt-5.5
+  research_tool_type: web_search
+  research_context_size: medium
+  research_timeout: 90s
 ```
 
 Set the API key in the environment variable named by `api_key_env`.
 You can also set `api_key` directly in YAML. When both are present, `api_key` takes precedence. `base_url` and `endpoint_path` support OpenAI-compatible image generation services, not only OpenAI itself.
+
+The `research_*` settings power the AI fill button on the formula creation page. It calls a Responses-compatible text model with web search enabled, then fills the source, composition, method, and effect fields from the returned JSON. When `research_api_key` and `research_api_key_env` are empty, the service falls back to `api_key` and `api_key_env`.
+After login, the same settings can be edited from the 大模型设置 page. The page saves changes back to the active YAML config file and applies them to the running process.
 
 ## Endpoints
 
 - `GET /login` renders the login page.
 - `GET /` renders the embedded HTML page after login.
 - `GET /tools/image-splitter` opens the local image splitting tool.
+- `GET /settings/ai` opens model configuration and connection testing.
 - `GET /foods/new` opens the formula creation page.
+- `POST /foods/research` researches a formula name and returns draft fields for the creation page.
 - `GET /foods/:id/images` opens the formula image generation page.
 - `POST /foods/:id/images/generate` generates formula introduction images.
 - `GET /healthz` checks PostgreSQL and Redis.

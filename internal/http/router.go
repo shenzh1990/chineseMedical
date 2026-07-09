@@ -54,10 +54,10 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	router.Static("/generated", deps.Config.AI.OutputDir)
 
 	handler := Handler{
-		deps:      deps,
-		foods:     repository.NewMedicatedFoodRepository(deps.DB),
-		users:     repository.NewUserRepository(deps.DB),
-		generator: ai.NewImageGenerator(deps.Config.AI),
+		deps:       deps,
+		foods:      repository.NewMedicatedFoodRepository(deps.DB),
+		users:      repository.NewUserRepository(deps.DB),
+		aiSettings: ai.NewSettingsStore(deps.Config.AI),
 	}
 	router.GET("/login", handler.Login)
 	router.POST("/login", handler.LoginPost)
@@ -70,11 +70,16 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	protected.GET("/account/password", handler.ChangePassword)
 	protected.POST("/account/password", handler.ChangePasswordPost)
 	protected.GET("/tools/image-splitter", handler.ImageSplitter)
+	protected.GET("/settings/ai", handler.AISettings)
+	protected.POST("/settings/ai", handler.SaveAISettings)
+	protected.POST("/settings/ai/test", handler.TestAISettings)
 	protected.GET("/foods/new", handler.NewFood)
+	protected.POST("/foods/research", handler.ResearchFood)
 	protected.POST("/foods", handler.CreateFood)
 	protected.GET("/foods/:id/images", handler.FoodImages)
 	protected.POST("/foods/:id/images/generate", handler.GenerateFoodImages)
 	protected.POST("/foods/:id/images/upload", handler.UploadFoodImage)
+	protected.POST("/foods/:id/images/delete", handler.DeleteFoodImage)
 
 	api := router.Group("/api")
 	api.GET("/health", handler.Healthz)

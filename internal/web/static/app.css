@@ -199,6 +199,90 @@ h1 {
   line-height: 1.6;
 }
 
+.input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.input-action button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 16px;
+  background: #172033;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.input-action button:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.research-status {
+  min-height: 22px;
+  color: #6b7788;
+  font-size: 14px;
+}
+
+.research-status[data-state="success"] {
+  color: #17624f;
+}
+
+.research-status[data-state="error"] {
+  color: #b42318;
+}
+
+.settings-form {
+  gap: 22px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-section + .settings-section {
+  border-top: 1px solid #d8deea;
+  padding-top: 22px;
+}
+
+.settings-section h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.settings-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-grid-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  margin-top: 25px;
+  color: #536173;
+  font-weight: 700;
+}
+
+.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  padding: 0;
+  min-height: 0;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -571,7 +655,7 @@ dd {
   margin-top: 18px;
 }
 
-.image-grid a {
+.image-card {
   overflow: hidden;
   border: 1px solid #d8deea;
   border-radius: 8px;
@@ -579,10 +663,32 @@ dd {
   box-shadow: 0 16px 40px rgba(23, 32, 51, 0.06);
 }
 
+.image-card a {
+  display: block;
+}
+
 .image-grid img {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.image-card form {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px;
+}
+
+.image-card button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  background: #fff0f0;
+  color: #9f1d1d;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .splitter-layout {
@@ -834,6 +940,8 @@ dd {
   .image-grid,
   .splitter-layout,
   .slice-preview,
+  .settings-grid-three,
+  .settings-grid-four,
   .form-row.two-columns {
     grid-template-columns: 1fr;
   }

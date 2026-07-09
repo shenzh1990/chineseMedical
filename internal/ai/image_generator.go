@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,13 @@ import (
 	"chinese-medical/internal/model"
 )
 
+const (
+	generatedImageCount        = 4
+	maxImageGenerationAttempts = 3
+)
+
+var ErrTemporaryImageGeneration = errors.New("temporary image generation failure")
+
 type ImageGenerator struct {
 	cfg    config.AIConfig
 	client *http.Client
@@ -25,6 +33,7 @@ type ImageGenerator struct {
 type GeneratedImage struct {
 	Path string
 	URL  string
+	Name string
 }
 
 type generationRequest struct {
@@ -45,6 +54,33 @@ type generationResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
+}
+
+type temporaryImageGenerationError struct {
+	err error
+}
+
+func (e temporaryImageGenerationError) Error() string {
+	return e.err.Error()
+}
+
+func (e temporaryImageGenerationError) Unwrap() error {
+	return e.err
+}
+
+func (e temporaryImageGenerationError) Is(target error) bool {
+	return target == ErrTemporaryImageGeneration
+}
+
+type imageModelStatusError struct {
+	Status      string
+	StatusCode  int
+	ContentType string
+	Body        string
+}
+
+func (e imageModelStatusError) Error() string {
+	return fmt.Sprintf("image model returned %s (%s): %s", e.Status, e.ContentType, e.Body)
 }
 
 func NewImageGenerator(cfg config.AIConfig) ImageGenerator {
@@ -72,13 +108,14 @@ func (g ImageGenerator) Existing(foodID int64) ([]GeneratedImage, error) {
 		images = append(images, GeneratedImage{
 			Path: path,
 			URL:  "/" + filepath.ToSlash(path),
+			Name: filepath.Base(path),
 		})
 	}
 	return images, nil
 }
 
 func (g ImageGenerator) Prompt(item model.MedicatedFood) string {
-	return buildPrompt(g.cfg.ImageCount, item)
+	return buildPrompt(g.count(), g.size(), item)
 }
 
 func (g ImageGenerator) SaveUploaded(foodID int64, filename string, r io.Reader) (GeneratedImage, error) {
@@ -113,7 +150,37 @@ func (g ImageGenerator) SaveUploaded(foodID int64, filename string, r io.Reader)
 	return GeneratedImage{
 		Path: path,
 		URL:  "/" + filepath.ToSlash(path),
+		Name: filepath.Base(path),
 	}, nil
+}
+
+func (g ImageGenerator) Delete(foodID int64, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("image name is required")
+	}
+	if filepath.Base(name) != name {
+		return fmt.Errorf("invalid image name")
+	}
+	if _, err := uploadExtension(name, ""); err != nil {
+		return err
+	}
+
+	path := filepath.Join(g.foodDir(foodID), name)
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("image not found: %w", err)
+		}
+		return fmt.Errorf("stat image file: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("image path is a directory")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("delete image file: %w", err)
+	}
+	return nil
 }
 
 func (g ImageGenerator) Generate(ctx context.Context, item model.MedicatedFood) ([]GeneratedImage, error) {
@@ -121,23 +188,89 @@ func (g ImageGenerator) Generate(ctx context.Context, item model.MedicatedFood) 
 		return nil, fmt.Errorf("create image output dir: %w", err)
 	}
 
+	count := g.count()
+	images := make([]GeneratedImage, 0, count)
+	stamp := time.Now().Format("20060102-150405")
+	for index := 1; index <= count; index++ {
+		result, err := g.generateOne(ctx, item, count, index, stamp)
+		if err != nil {
+			return images, fmt.Errorf("generate image %d/%d: %w", index, count, err)
+		}
+		images = append(images, result)
+	}
+
+	return images, nil
+}
+
+func (g ImageGenerator) generateOne(ctx context.Context, item model.MedicatedFood, count, index int, stamp string) (GeneratedImage, error) {
 	payload := generationRequest{
 		Model:        g.cfg.Model,
-		Prompt:       g.Prompt(item),
-		N:            g.cfg.ImageCount,
+		Prompt:       buildImagePrompt(count, g.size(), item, index),
+		N:            1,
 		Size:         g.cfg.Size,
 		Quality:      g.cfg.Quality,
 		OutputFormat: g.cfg.OutputFormat,
 	}
 
+	result, err := g.callImageModelWithRetry(ctx, payload)
+	if err != nil {
+		return GeneratedImage{}, err
+	}
+	if len(result.Data) == 0 {
+		return GeneratedImage{}, fmt.Errorf("image model returned empty data")
+	}
+
+	image := result.Data[0]
+	path := filepath.Join(g.foodDir(item.ID), fmt.Sprintf("%s-%02d.%s", stamp, index, g.extension()))
+	if image.B64JSON != "" {
+		if err := writeBase64Image(path, image.B64JSON); err != nil {
+			return GeneratedImage{}, err
+		}
+	} else if image.URL != "" {
+		if err := g.downloadImage(ctx, path, image.URL); err != nil {
+			return GeneratedImage{}, err
+		}
+	} else {
+		return GeneratedImage{}, fmt.Errorf("image response item has no image payload")
+	}
+
+	return GeneratedImage{
+		Path: path,
+		URL:  "/" + filepath.ToSlash(path),
+		Name: filepath.Base(path),
+	}, nil
+}
+
+func (g ImageGenerator) callImageModelWithRetry(ctx context.Context, payload generationRequest) (generationResponse, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxImageGenerationAttempts; attempt++ {
+		result, err := g.callImageModel(ctx, payload)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isTemporaryImageGenerationError(err) || attempt == maxImageGenerationAttempts {
+			break
+		}
+		if err := sleepWithContext(ctx, time.Duration(attempt)*2*time.Second); err != nil {
+			return generationResponse{}, err
+		}
+	}
+	if isTemporaryImageGenerationError(lastErr) {
+		return generationResponse{}, temporaryImageGenerationError{err: lastErr}
+	}
+	return generationResponse{}, lastErr
+}
+
+func (g ImageGenerator) callImageModel(ctx context.Context, payload generationRequest) (generationResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal image request: %w", err)
+		return generationResponse{}, fmt.Errorf("marshal image request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpointURL(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create image request: %w", err)
+		return generationResponse{}, fmt.Errorf("create image request: %w", err)
 	}
 	if apiKey := g.apiKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -146,56 +279,75 @@ func (g ImageGenerator) Generate(ctx context.Context, item model.MedicatedFood) 
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call image model: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return generationResponse{}, temporaryImageGenerationError{err: fmt.Errorf("call image model: %w", err)}
+		}
+		return generationResponse{}, fmt.Errorf("call image model: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read image response: %w", err)
+		return generationResponse{}, fmt.Errorf("read image response: %w", err)
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var result generationResponse
 		if err := json.Unmarshal(respBody, &result); err == nil && result.Error != nil {
-			return nil, fmt.Errorf("image model returned %s: %s", resp.Status, result.Error.Message)
+			statusErr := imageModelStatusError{
+				Status:      resp.Status,
+				StatusCode:  resp.StatusCode,
+				ContentType: resp.Header.Get("Content-Type"),
+				Body:        result.Error.Message,
+			}
+			if isTemporaryStatus(resp.StatusCode) {
+				return generationResponse{}, temporaryImageGenerationError{err: statusErr}
+			}
+			return generationResponse{}, statusErr
 		}
-		return nil, fmt.Errorf("image model returned %s (%s): %s", resp.Status, resp.Header.Get("Content-Type"), responseSnippet(respBody))
+
+		statusErr := imageModelStatusError{
+			Status:      resp.Status,
+			StatusCode:  resp.StatusCode,
+			ContentType: resp.Header.Get("Content-Type"),
+			Body:        responseSnippet(respBody),
+		}
+		if isTemporaryStatus(resp.StatusCode) {
+			return generationResponse{}, temporaryImageGenerationError{err: statusErr}
+		}
+		return generationResponse{}, statusErr
 	}
 
 	var result generationResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("parse image response from %s (%s): %w; body: %s", resp.Status, resp.Header.Get("Content-Type"), err, responseSnippet(respBody))
+		return generationResponse{}, fmt.Errorf("parse image response from %s (%s): %w; body: %s", resp.Status, resp.Header.Get("Content-Type"), err, responseSnippet(respBody))
 	}
 	if result.Error != nil {
-		return nil, fmt.Errorf("image model returned error: %s", result.Error.Message)
+		return generationResponse{}, fmt.Errorf("image model returned error: %s", result.Error.Message)
 	}
-	if len(result.Data) == 0 {
-		return nil, fmt.Errorf("image model returned empty data")
-	}
+	return result, nil
+}
 
-	images := make([]GeneratedImage, 0, len(result.Data))
-	stamp := time.Now().Format("20060102-150405")
-	for index, image := range result.Data {
-		path := filepath.Join(g.foodDir(item.ID), fmt.Sprintf("%s-%02d.%s", stamp, index+1, g.extension()))
-		if image.B64JSON != "" {
-			if err := writeBase64Image(path, image.B64JSON); err != nil {
-				return nil, err
-			}
-		} else if image.URL != "" {
-			if err := g.downloadImage(ctx, path, image.URL); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, fmt.Errorf("image response item %d has no image payload", index+1)
-		}
-		images = append(images, GeneratedImage{
-			Path: path,
-			URL:  "/" + filepath.ToSlash(path),
-		})
-	}
+func isTemporaryStatus(statusCode int) bool {
+	return statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout ||
+		statusCode == http.StatusTooManyRequests
+}
 
-	return images, nil
+func isTemporaryImageGenerationError(err error) bool {
+	return errors.Is(err, ErrTemporaryImageGeneration)
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (g ImageGenerator) apiKey() string {
@@ -256,6 +408,21 @@ func (g ImageGenerator) extension() string {
 	}
 }
 
+func (g ImageGenerator) count() int {
+	if g.cfg.ImageCount <= 0 {
+		return generatedImageCount
+	}
+	return g.cfg.ImageCount
+}
+
+func (g ImageGenerator) size() string {
+	size := strings.TrimSpace(g.cfg.Size)
+	if size == "" {
+		return "720x1280"
+	}
+	return size
+}
+
 func writeBase64Image(path, payload string) error {
 	data, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
@@ -306,35 +473,50 @@ func uploadExtension(filename string, contentType string) (string, error) {
 	}
 }
 
-func buildPrompt(count int, item model.MedicatedFood) string {
+func buildPrompt(count int, size string, item model.MedicatedFood) string {
+	return buildImagePrompt(count, size, item, 0)
+}
+
+func buildImagePrompt(count int, size string, item model.MedicatedFood, index int) string {
 	if count <= 0 {
-		count = 4
+		count = generatedImageCount
+	}
+	size = strings.TrimSpace(size)
+	if size == "" {
+		size = "720x1280"
 	}
 	category := model.NormalizeFoodCategory(item.Category)
-	return fmt.Sprintf(`为中医“%s”类别下的调理方“%s”生成 %d 张连贯的中文方剂介绍图。
+	seriesInstruction := fmt.Sprintf("请设计一套 %d 张连贯的中文方剂介绍图。", count)
+	outputInstruction := fmt.Sprintf("请生成 %d 张独立图片，每张图都是单独的竖屏海报，不要生成一张包含四个版面的合集图。", count)
+	if index > 0 {
+		seriesInstruction = fmt.Sprintf("这是一套 %d 张连贯中文方剂介绍图中的第 %d 张。", count, index)
+		outputInstruction = fmt.Sprintf("本次请求只生成第 %d/%d 张独立竖屏海报，不要生成合集图。", index, count)
+	}
+
+	return fmt.Sprintf(`为中医“%s”类别下的调理方“%s”生成图片。%s
 
 主要应用场景：
 - 图片主要用于手机竖屏浏览，请按竖版海报设计。
-- 每张图的画面比例为 9:16，目标分辨率为 1080x1920 px。
+- 每张图的画面比例为 9:16，目标分辨率为 %s px。
 - 重要标题、序号和正文需要在手机屏幕上清晰可读，避免过小文字。
 - 内容需要适合在移动端网页中连续上下滑动查看，留出安全边距，不要把文字贴近边缘。
 
 整体要求：
-- 请生成 %d 张独立图片，每张图都是单独的竖屏海报，不要生成一张包含四个版面的合集图。
+- %s
 - 禁止四宫格、拼贴图、长图分栏、单张图片内同时排布 1/4、2/4、3/4、4/4 四个页面。
 - 这 %d 张独立图片要像同一套科普海报系列：统一配色、统一字体层级、统一版式语言。
 - 风格清雅、专业、适合网页展示；不要出现夸大疗效承诺、医生肖像、医院背书、处方笺或药品广告语。
 - 每张图都需要有清晰中文标题“%s”，并带序号，例如 1/%d、2/%d。
+- 每张图都需要在标题附近设置醒目的类别标签位，标签文字为“%s”；类别只作为视觉标签，不作为正文内容编号。
 - 文案要简洁，不要堆满小字；信息准确来自下面字段，可以在不改变原意、不添加未经证实疗效的前提下适当扩展表达，让画面内容更自然完整。
 
 请把内容自然分配到多张图：
-1. 类别：%s
-2. 来源：%s
-3. 组成：%s
-4. 制法：%s
-5. 功效：%s
+1. 来源：%s
+2. 组成：%s
+3. 制法：%s
+4. 功效：%s
 
-如果某个字段为空，请用“未注明”自然表达。`, category, item.Name, count, count, count, item.Name, count, count, category, promptTextOrUnknown(item.Source), promptTextOrUnknown(item.Food), promptTextOrUnknown(item.Method), promptTextOrUnknown(item.Effect))
+如果某个字段为空，请用“未注明”自然表达。`, category, item.Name, seriesInstruction, size, outputInstruction, count, item.Name, count, count, category, promptTextOrUnknown(item.Source), promptTextOrUnknown(item.Food), promptTextOrUnknown(item.Method), promptTextOrUnknown(item.Effect))
 }
 
 func promptTextOrUnknown(value string) string {

@@ -30,6 +30,9 @@
     {{ if .Uploaded }}
       <section class="notice success">图片已上传。</section>
     {{ end }}
+    {{ if .Deleted }}
+      <section class="notice success">图片已删除。</section>
+    {{ end }}
 
     {{ if .Food }}
       <section class="detail-layout">
@@ -88,9 +91,15 @@
       {{ if .Images }}
         <section class="image-grid">
           {{ range .Images }}
-            <a href="{{ .URL }}" target="_blank" rel="noreferrer">
-              <img src="{{ .URL }}" alt="方剂介绍图">
-            </a>
+            <article class="image-card">
+              <a href="{{ .URL }}" target="_blank" rel="noreferrer">
+                <img src="{{ .URL }}" alt="方剂介绍图">
+              </a>
+              <form method="post" action="/foods/{{ $.Food.ID }}/images/delete" onsubmit="return confirm('确定删除这张介绍图吗？');">
+                <input type="hidden" name="image" value="{{ .Name }}">
+                <button type="submit">删除</button>
+              </form>
+            </article>
           {{ end }}
         </section>
       {{ else }}

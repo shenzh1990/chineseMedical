@@ -27,8 +27,16 @@ ai:
   api_key_env: OPENAI_API_KEY
   model: gpt-image-2
   image_count: 4
-  size: 1080x1920
+  size: 720x1280
   quality: medium
   output_format: png
   output_dir: generated
-  timeout: 120s
+  timeout: 240s
+  research_base_url: https://ip:port/v1
+  research_endpoint_path: /responses
+  research_api_key: ""
+  research_api_key_env: OPENAI_API_KEY
+  research_model: gpt-5.5
+  research_tool_type: web_search
+  research_context_size: medium
+  research_timeout: 90s

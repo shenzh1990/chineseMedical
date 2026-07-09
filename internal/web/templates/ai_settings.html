@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大模型设置 - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">AI Settings</p>
+        <h1>大模型设置</h1>
+      </div>
+      <nav class="actions">
+        <a href="/">返回列表</a>
+      </nav>
+    </header>
+
+    {{ if .Error }}
+      <section class="notice error">{{ .Error }}</section>
+    {{ end }}
+    {{ if .Success }}
+      <section class="notice success">{{ .Success }}</section>
+    {{ end }}
+
+    <section class="form-panel">
+      <form class="food-form settings-form" method="post" action="/settings/ai">
+        <section class="settings-section">
+          <h2>图片生成</h2>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">Base URL</span>
+              <input name="base_url" value="{{ .Form.BaseURL }}" required>
+            </label>
+            <label>
+              <span class="label">Endpoint Path</span>
+              <input name="endpoint_path" value="{{ .Form.EndpointPath }}" required>
+            </label>
+          </div>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">Model</span>
+              <input name="model" value="{{ .Form.Model }}" required>
+            </label>
+            <label>
+              <span class="label">API Key Env</span>
+              <input name="api_key_env" value="{{ .Form.APIKeyEnv }}">
+            </label>
+          </div>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">API Key{{ if .Form.APIKeySet }}（已设置）{{ end }}</span>
+              <input name="api_key" type="password" autocomplete="new-password" placeholder="留空保持原值">
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="clear_api_key" value="1">
+              <span>清空 API Key</span>
+            </label>
+          </div>
+          <div class="form-row settings-grid-four">
+            <label>
+              <span class="label">图片数量</span>
+              <input name="image_count" type="number" min="1" value="{{ .Form.ImageCount }}" required>
+            </label>
+            <label>
+              <span class="label">尺寸</span>
+              <input name="size" value="{{ .Form.Size }}" required>
+            </label>
+            <label>
+              <span class="label">质量</span>
+              <input name="quality" value="{{ .Form.Quality }}" required>
+            </label>
+            <label>
+              <span class="label">格式</span>
+              <input name="output_format" value="{{ .Form.OutputFormat }}" required>
+            </label>
+          </div>
+          <label>
+            <span class="label">超时时间</span>
+            <input name="timeout" value="{{ .Form.Timeout }}" required>
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h2>资料检索</h2>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">Base URL</span>
+              <input name="research_base_url" value="{{ .Form.ResearchBaseURL }}" required>
+            </label>
+            <label>
+              <span class="label">Endpoint Path</span>
+              <input name="research_endpoint_path" value="{{ .Form.ResearchEndpointPath }}" required>
+            </label>
+          </div>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">Model</span>
+              <input name="research_model" value="{{ .Form.ResearchModel }}" required>
+            </label>
+            <label>
+              <span class="label">API Key Env</span>
+              <input name="research_api_key_env" value="{{ .Form.ResearchAPIKeyEnv }}">
+            </label>
+          </div>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">API Key{{ if .Form.ResearchAPIKeySet }}（已设置）{{ end }}</span>
+              <input name="research_api_key" type="password" autocomplete="new-password" placeholder="留空保持原值">
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="clear_research_api_key" value="1">
+              <span>清空 API Key</span>
+            </label>
+          </div>
+          <div class="form-row settings-grid-three">
+            <label>
+              <span class="label">搜索工具</span>
+              <input name="research_tool_type" value="{{ .Form.ResearchToolType }}">
+            </label>
+            <label>
+              <span class="label">上下文</span>
+              <input name="research_context_size" value="{{ .Form.ResearchContextSize }}">
+            </label>
+            <label>
+              <span class="label">超时时间</span>
+              <input name="research_timeout" value="{{ .Form.ResearchTimeout }}" required>
+            </label>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <a href="/">取消</a>
+          <button type="submit" formaction="/settings/ai/test">测试连接</button>
+          <button type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

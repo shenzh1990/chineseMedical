@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"chinese-medical/internal/ai"
+	"chinese-medical/internal/config"
 	"chinese-medical/internal/model"
 	"chinese-medical/internal/repository"
 
@@ -18,10 +20,10 @@ import (
 )
 
 type Handler struct {
-	deps      Dependencies
-	foods     repository.MedicatedFoodRepository
-	users     repository.UserRepository
-	generator ai.ImageGenerator
+	deps       Dependencies
+	foods      repository.MedicatedFoodRepository
+	users      repository.UserRepository
+	aiSettings *ai.SettingsStore
 }
 
 type medicatedFoodForm struct {
@@ -32,6 +34,35 @@ type medicatedFoodForm struct {
 	Food     string
 	Method   string
 	Effect   string
+}
+
+type foodResearchRequest struct {
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	SourceURL string `json:"source_url"`
+}
+
+type aiSettingsForm struct {
+	BaseURL              string
+	EndpointPath         string
+	APIKey               string
+	APIKeySet            bool
+	APIKeyEnv            string
+	Model                string
+	ImageCount           string
+	Size                 string
+	Quality              string
+	OutputFormat         string
+	Timeout              string
+	ResearchBaseURL      string
+	ResearchEndpointPath string
+	ResearchAPIKey       string
+	ResearchAPIKeySet    bool
+	ResearchAPIKeyEnv    string
+	ResearchModel        string
+	ResearchToolType     string
+	ResearchContextSize  string
+	ResearchTimeout      string
 }
 
 func (h Handler) Login(c *gin.Context) {
@@ -195,10 +226,98 @@ func (h Handler) ImageSplitter(c *gin.Context) {
 	})
 }
 
+func (h Handler) AISettings(c *gin.Context) {
+	h.renderAISettings(c, http.StatusOK, "", "", aiSettingsFormFromConfig(h.aiSettings.Config()))
+}
+
+func (h Handler) SaveAISettings(c *gin.Context) {
+	form := aiSettingsFormFromPost(c, h.aiSettings.Config())
+	updated, err := form.toConfig(h.aiSettings.Config(), c.PostForm("clear_api_key") != "", c.PostForm("clear_research_api_key") != "")
+	if err != nil {
+		h.renderAISettings(c, http.StatusBadRequest, userFacingAISettingsError(err), "", form)
+		return
+	}
+
+	if err := config.WriteAIConfig(h.deps.Config.Path, updated); err != nil {
+		h.deps.Logger.Warn("write ai settings", "error", err)
+		h.renderAISettings(c, http.StatusInternalServerError, userFacingAISettingsError(err), "", form)
+		return
+	}
+
+	h.aiSettings.Update(updated)
+	h.renderAISettings(c, http.StatusOK, "", "大模型配置已保存。", aiSettingsFormFromConfig(updated))
+}
+
+func (h Handler) TestAISettings(c *gin.Context) {
+	form := aiSettingsFormFromPost(c, h.aiSettings.Config())
+	cfg, err := form.toConfig(h.aiSettings.Config(), c.PostForm("clear_api_key") != "", c.PostForm("clear_research_api_key") != "")
+	if err != nil {
+		h.renderAISettings(c, http.StatusBadRequest, userFacingAISettingsError(err), "", form)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), cfg.ResearchTimeout)
+	defer cancel()
+
+	result, err := ai.NewFoodResearcher(cfg).SimpleTest(ctx)
+	if err != nil {
+		h.deps.Logger.Warn("test ai settings", "error", err)
+		h.renderAISettings(c, http.StatusBadGateway, userFacingResearchError(err), "", form)
+		return
+	}
+
+	h.renderAISettings(c, http.StatusOK, "", "测试成功："+result, form)
+}
+
+func (h Handler) renderAISettings(c *gin.Context, status int, errorMessage, successMessage string, form aiSettingsForm) {
+	c.HTML(status, "ai_settings.html", gin.H{
+		"AppName": h.deps.Config.AppName,
+		"Error":   errorMessage,
+		"Success": successMessage,
+		"Form":    form,
+	})
+}
+
 func (h Handler) NewFood(c *gin.Context) {
 	h.renderFoodForm(c, http.StatusOK, "", medicatedFoodForm{
 		Category: model.DefaultFoodCategory,
 	})
+}
+
+func (h Handler) ResearchFood(c *gin.Context) {
+	var req foodResearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式不正确。"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先填写名称。"})
+		return
+	}
+	if len([]rune(name)) > 120 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "名称过长，请控制在 120 个字以内。"})
+		return
+	}
+	sourceURL := strings.TrimSpace(req.SourceURL)
+	if sourceURL != "" && !isHTTPURL(sourceURL) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "网页地址必须以 http:// 或 https:// 开头。"})
+		return
+	}
+
+	cfg := h.aiSettings.Config()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), cfg.ResearchTimeout)
+	defer cancel()
+
+	draft, err := ai.NewFoodResearcher(cfg).Research(ctx, name, req.Category, sourceURL)
+	if err != nil {
+		h.deps.Logger.Warn("research medicated food", "name", name, "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": userFacingResearchError(err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"food": draft})
 }
 
 func (h Handler) CreateFood(c *gin.Context) {
@@ -276,7 +395,9 @@ func (h Handler) FoodImages(c *gin.Context) {
 		return
 	}
 
-	images, err := h.generator.Existing(id)
+	cfg := h.aiSettings.Config()
+	generator := ai.NewImageGenerator(cfg)
+	images, err := generator.Existing(id)
 	if err != nil {
 		h.deps.Logger.Warn("list generated images", "id", id, "error", err)
 	}
@@ -285,14 +406,15 @@ func (h Handler) FoodImages(c *gin.Context) {
 		"AppName":    h.deps.Config.AppName,
 		"Food":       item,
 		"Images":     images,
-		"ImageCount": h.deps.Config.AI.ImageCount,
-		"Model":      h.deps.Config.AI.Model,
-		"BaseURL":    h.deps.Config.AI.BaseURL,
-		"Prompt":     h.generator.Prompt(item),
+		"ImageCount": cfg.ImageCount,
+		"Model":      cfg.Model,
+		"BaseURL":    cfg.BaseURL,
+		"Prompt":     generator.Prompt(item),
 		"Error":      c.Query("error"),
 		"Created":    c.Query("created") == "1",
 		"Generated":  c.Query("generated") == "1",
 		"Uploaded":   c.Query("uploaded") == "1",
+		"Deleted":    c.Query("deleted") == "1",
 	})
 }
 
@@ -312,10 +434,11 @@ func (h Handler) GenerateFoodImages(c *gin.Context) {
 		return
 	}
 
-	generationCtx, generationCancel := context.WithTimeout(c.Request.Context(), h.deps.Config.AI.Timeout)
+	cfg := h.aiSettings.Config()
+	generationCtx, generationCancel := context.WithTimeout(c.Request.Context(), cfg.Timeout)
 	defer generationCancel()
 
-	if _, err := h.generator.Generate(generationCtx, item); err != nil {
+	if _, err := ai.NewImageGenerator(cfg).Generate(generationCtx, item); err != nil {
 		h.deps.Logger.Warn("generate food images", "id", id, "error", err)
 		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape(userFacingGenerationError(err)))
 		return
@@ -345,13 +468,34 @@ func (h Handler) UploadFoodImage(c *gin.Context) {
 	}
 	defer file.Close()
 
-	if _, err := h.generator.SaveUploaded(id, fileHeader.Filename, file); err != nil {
+	if _, err := h.aiSettings.ImageGenerator().SaveUploaded(id, fileHeader.Filename, file); err != nil {
 		h.deps.Logger.Warn("save uploaded food image", "id", id, "error", err)
 		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape(userFacingUploadError(err)))
 		return
 	}
 
 	c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?uploaded=1")
+}
+
+func (h Handler) DeleteFoodImage(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+
+	name := strings.TrimSpace(c.PostForm("image"))
+	if name == "" {
+		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape("请选择要删除的图片"))
+		return
+	}
+
+	if err := h.aiSettings.ImageGenerator().Delete(id, name); err != nil {
+		h.deps.Logger.Warn("delete food image", "id", id, "image", name, "error", err)
+		c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?error="+url.QueryEscape(userFacingDeleteImageError(err)))
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/foods/"+strconv.FormatInt(id, 10)+"/images?deleted=1")
 }
 
 func (h Handler) Healthz(c *gin.Context) {
@@ -399,12 +543,167 @@ func pathID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+func aiSettingsFormFromConfig(cfg config.AIConfig) aiSettingsForm {
+	return aiSettingsForm{
+		BaseURL:              cfg.BaseURL,
+		EndpointPath:         cfg.EndpointPath,
+		APIKeySet:            strings.TrimSpace(cfg.APIKey) != "",
+		APIKeyEnv:            cfg.APIKeyEnv,
+		Model:                cfg.Model,
+		ImageCount:           strconv.Itoa(cfg.ImageCount),
+		Size:                 cfg.Size,
+		Quality:              cfg.Quality,
+		OutputFormat:         cfg.OutputFormat,
+		Timeout:              cfg.Timeout.String(),
+		ResearchBaseURL:      cfg.ResearchBaseURL,
+		ResearchEndpointPath: cfg.ResearchEndpointPath,
+		ResearchAPIKeySet:    strings.TrimSpace(cfg.ResearchAPIKey) != "",
+		ResearchAPIKeyEnv:    cfg.ResearchAPIKeyEnv,
+		ResearchModel:        cfg.ResearchModel,
+		ResearchToolType:     cfg.ResearchToolType,
+		ResearchContextSize:  cfg.ResearchContextSize,
+		ResearchTimeout:      cfg.ResearchTimeout.String(),
+	}
+}
+
+func aiSettingsFormFromPost(c *gin.Context, current config.AIConfig) aiSettingsForm {
+	form := aiSettingsForm{
+		BaseURL:              strings.TrimSpace(c.PostForm("base_url")),
+		EndpointPath:         strings.TrimSpace(c.PostForm("endpoint_path")),
+		APIKey:               strings.TrimSpace(c.PostForm("api_key")),
+		APIKeySet:            strings.TrimSpace(current.APIKey) != "",
+		APIKeyEnv:            strings.TrimSpace(c.PostForm("api_key_env")),
+		Model:                strings.TrimSpace(c.PostForm("model")),
+		ImageCount:           strings.TrimSpace(c.PostForm("image_count")),
+		Size:                 strings.TrimSpace(c.PostForm("size")),
+		Quality:              strings.TrimSpace(c.PostForm("quality")),
+		OutputFormat:         strings.TrimSpace(c.PostForm("output_format")),
+		Timeout:              strings.TrimSpace(c.PostForm("timeout")),
+		ResearchBaseURL:      strings.TrimSpace(c.PostForm("research_base_url")),
+		ResearchEndpointPath: strings.TrimSpace(c.PostForm("research_endpoint_path")),
+		ResearchAPIKey:       strings.TrimSpace(c.PostForm("research_api_key")),
+		ResearchAPIKeySet:    strings.TrimSpace(current.ResearchAPIKey) != "",
+		ResearchAPIKeyEnv:    strings.TrimSpace(c.PostForm("research_api_key_env")),
+		ResearchModel:        strings.TrimSpace(c.PostForm("research_model")),
+		ResearchToolType:     strings.TrimSpace(c.PostForm("research_tool_type")),
+		ResearchContextSize:  strings.TrimSpace(c.PostForm("research_context_size")),
+		ResearchTimeout:      strings.TrimSpace(c.PostForm("research_timeout")),
+	}
+	if form.APIKey != "" {
+		form.APIKeySet = true
+	}
+	if c.PostForm("clear_api_key") != "" {
+		form.APIKeySet = false
+	}
+	if form.ResearchAPIKey != "" {
+		form.ResearchAPIKeySet = true
+	}
+	if c.PostForm("clear_research_api_key") != "" {
+		form.ResearchAPIKeySet = false
+	}
+	return form
+}
+
+func (f aiSettingsForm) toConfig(current config.AIConfig, clearAPIKey, clearResearchAPIKey bool) (config.AIConfig, error) {
+	updated := current
+
+	baseURL := strings.TrimRight(strings.TrimSpace(f.BaseURL), "/")
+	if baseURL == "" {
+		return config.AIConfig{}, fmt.Errorf("图片生成 Base URL 不能为空")
+	}
+	model := strings.TrimSpace(f.Model)
+	if model == "" {
+		return config.AIConfig{}, fmt.Errorf("图片生成模型不能为空")
+	}
+	imageCount, err := strconv.Atoi(strings.TrimSpace(f.ImageCount))
+	if err != nil || imageCount <= 0 {
+		return config.AIConfig{}, fmt.Errorf("图片数量必须是大于 0 的数字")
+	}
+	timeout, err := time.ParseDuration(strings.TrimSpace(f.Timeout))
+	if err != nil {
+		return config.AIConfig{}, fmt.Errorf("图片生成超时时间格式不正确：%w", err)
+	}
+
+	researchBaseURL := strings.TrimRight(strings.TrimSpace(f.ResearchBaseURL), "/")
+	if researchBaseURL == "" {
+		return config.AIConfig{}, fmt.Errorf("资料检索 Base URL 不能为空")
+	}
+	researchModel := strings.TrimSpace(f.ResearchModel)
+	if researchModel == "" {
+		return config.AIConfig{}, fmt.Errorf("资料检索模型不能为空")
+	}
+	researchTimeout, err := time.ParseDuration(strings.TrimSpace(f.ResearchTimeout))
+	if err != nil {
+		return config.AIConfig{}, fmt.Errorf("资料检索超时时间格式不正确：%w", err)
+	}
+
+	updated.BaseURL = baseURL
+	updated.EndpointPath = settingEndpointPath(f.EndpointPath, "/images/generations")
+	updated.Model = model
+	updated.ImageCount = imageCount
+	updated.Size = fallbackSetting(f.Size, "720x1280")
+	updated.Quality = fallbackSetting(f.Quality, "medium")
+	updated.OutputFormat = fallbackSetting(f.OutputFormat, "png")
+	updated.Timeout = timeout
+	updated.APIKeyEnv = strings.TrimSpace(f.APIKeyEnv)
+	if clearAPIKey {
+		updated.APIKey = ""
+	} else if strings.TrimSpace(f.APIKey) != "" {
+		updated.APIKey = strings.TrimSpace(f.APIKey)
+	}
+
+	updated.ResearchBaseURL = researchBaseURL
+	updated.ResearchEndpointPath = settingEndpointPath(f.ResearchEndpointPath, "/responses")
+	updated.ResearchModel = researchModel
+	updated.ResearchToolType = strings.TrimSpace(f.ResearchToolType)
+	updated.ResearchContextSize = strings.TrimSpace(f.ResearchContextSize)
+	updated.ResearchTimeout = researchTimeout
+	updated.ResearchAPIKeyEnv = strings.TrimSpace(f.ResearchAPIKeyEnv)
+	if clearResearchAPIKey {
+		updated.ResearchAPIKey = ""
+	} else if strings.TrimSpace(f.ResearchAPIKey) != "" {
+		updated.ResearchAPIKey = strings.TrimSpace(f.ResearchAPIKey)
+	}
+
+	return updated, nil
+}
+
+func settingEndpointPath(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	if !strings.HasPrefix(value, "/") {
+		return "/" + value
+	}
+	return value
+}
+
+func fallbackSetting(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func isHTTPURL(value string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
 func userFacingGenerationError(err error) string {
 	if err == nil {
 		return ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "生成超时，请稍后重试。"
+	}
+	if errors.Is(err, ai.ErrTemporaryImageGeneration) {
+		return "图片生成服务暂时繁忙或网关超时，系统已自动重试仍失败。请稍后再试。"
 	}
 	return err.Error()
 }
@@ -414,6 +713,33 @@ func userFacingUploadError(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func userFacingDeleteImageError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "删除图片失败：" + err.Error()
+}
+
+func userFacingResearchError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "检索超时，请稍后重试。"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "检索已取消，请重试。"
+	}
+	return "资料检索失败：" + err.Error()
+}
+
+func userFacingAISettingsError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "配置保存失败：" + err.Error()
 }
 
 func userFacingCreateFoodError(err error) string {
