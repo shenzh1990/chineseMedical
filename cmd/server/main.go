@@ -49,6 +49,9 @@ func run() error {
 	if err := database.EnsureMedicatedFoodSchema(ctx, db); err != nil {
 		return fmt.Errorf("ensure medicated food schema: %w", err)
 	}
+	if err := database.EnsureSkillHubSchema(ctx, db); err != nil {
+		return fmt.Errorf("ensure skillhub schema: %w", err)
+	}
 
 	redisClient, err := cache.NewRedisClient(ctx, cfg.Redis)
 	if err != nil {

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkillHub - {{ .AppName }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="admin-layout">
+    {{ template "admin_sidebar" . }}
+  <main class="content-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">内容工具</p>
+        <h1>SkillHub</h1>
+      </div>
+      <nav class="actions">
+        {{ if .Editing }}<a href="/skillhub">新增 Skill</a>{{ end }}
+      </nav>
+    </header>
+
+    {{ if .Error }}
+      <section class="notice error">{{ .Error }}</section>
+    {{ end }}
+    {{ if .Success }}
+      <section class="notice success">{{ .Success }}</section>
+    {{ end }}
+
+    <section class="summary">
+      <div>
+        <span class="label">Skill 总数</span>
+        <strong>{{ .Summary.Total }}</strong>
+      </div>
+      <div>
+        <span class="label">已启用</span>
+        <strong>{{ .Summary.Enabled }}</strong>
+      </div>
+    </section>
+
+    <form class="search skill-search" method="get" action="/skillhub">
+      <input name="q" value="{{ .Query }}" placeholder="搜索名称、标识、分类、标签">
+      <select name="category" aria-label="分类筛选">
+        <option value="">全部分类</option>
+        {{ range .Categories }}
+          <option value="{{ . }}" {{ if eq $.Category . }}selected{{ end }}>{{ . }}</option>
+        {{ end }}
+      </select>
+      <select name="enabled" aria-label="启停用筛选">
+        <option value="" {{ if not .EnabledFilter }}selected{{ end }}>全部状态</option>
+        <option value="enabled" {{ if eq .EnabledFilter "enabled" }}selected{{ end }}>仅启用</option>
+        <option value="disabled" {{ if eq .EnabledFilter "disabled" }}selected{{ end }}>仅停用</option>
+      </select>
+      <button type="submit">搜索</button>
+      {{ if .HasFilters }}<a href="/skillhub">清除</a>{{ end }}
+    </form>
+
+    <section class="skillhub-layout">
+      <div class="skillhub-list">
+        {{ if .Skills }}
+          {{ range .Skills }}
+            <article class="skill-card">
+              <div class="skill-card-head">
+                <div>
+                  <span class="category-badge">{{ .Category }}</span>
+                  {{ if .Enabled }}<span class="status-badge on">启用</span>{{ else }}<span class="status-badge off">停用</span>{{ end }}
+                </div>
+                <strong>{{ .Name }}</strong>
+              </div>
+              <code>{{ .Slug }}</code>
+              <p>{{ if .Description }}{{ .Description }}{{ else }}未注明简介{{ end }}</p>
+              <dl class="skill-meta">
+                <div>
+                  <dt>标签</dt>
+                  <dd>{{ if .Tags }}{{ .Tags }}{{ else }}未注明{{ end }}</dd>
+                </div>
+                <div>
+                  <dt>更新</dt>
+                  <dd>{{ .UpdatedAt.Format "2006-01-02 15:04" }}</dd>
+                </div>
+              </dl>
+              <div class="skill-card-actions">
+                <a href="/skillhub?edit={{ .ID }}&q={{ urlquery $.Query }}&category={{ urlquery $.Category }}&enabled={{ urlquery $.EnabledFilter }}">编辑</a>
+                <form method="post" action="/skillhub/{{ .ID }}/toggle">
+                  {{ if .Enabled }}
+                    <input type="hidden" name="enabled" value="0">
+                    <button type="submit">停用</button>
+                  {{ else }}
+                    <input type="hidden" name="enabled" value="1">
+                    <button type="submit">启用</button>
+                  {{ end }}
+                </form>
+                <form method="post" action="/skillhub/{{ .ID }}/delete" onsubmit="return confirm('确认删除这个 Skill？');">
+                  <button class="danger" type="submit">删除</button>
+                </form>
+              </div>
+            </article>
+          {{ end }}
+
+          <nav class="pager">
+            {{ if .HasPrev }}<a href="/skillhub?q={{ urlquery .Query }}&category={{ urlquery .Category }}&enabled={{ urlquery .EnabledFilter }}&page={{ .PrevPage }}&limit={{ .Limit }}">上一页</a>{{ else }}<span>上一页</span>{{ end }}
+            <strong>第 {{ .Page }} / {{ .TotalPages }} 页</strong>
+            {{ if .HasNext }}<a href="/skillhub?q={{ urlquery .Query }}&category={{ urlquery .Category }}&enabled={{ urlquery .EnabledFilter }}&page={{ .NextPage }}&limit={{ .Limit }}">下一页</a>{{ else }}<span>下一页</span>{{ end }}
+          </nav>
+        {{ else }}
+          <section class="empty">
+            {{ if .HasFilters }}没有匹配当前筛选条件的 Skill。{{ else }}暂无 Skill。{{ end }}
+          </section>
+        {{ end }}
+      </div>
+
+      <aside class="skillhub-editor">
+        <strong>{{ if .Editing }}编辑 Skill{{ else }}新增 Skill{{ end }}</strong>
+        <form class="food-form" method="post" action="{{ if .Editing }}/skillhub/{{ .Form.ID }}{{ else }}/skillhub{{ end }}">
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">名称</span>
+              <input name="name" value="{{ .Form.Name }}" maxlength="80" required>
+            </label>
+            <label>
+              <span class="label">调用标识</span>
+              <input name="slug" value="{{ .Form.Slug }}" maxlength="64" placeholder="tcm_diagnosis" required>
+            </label>
+          </div>
+          <div class="form-row two-columns">
+            <label>
+              <span class="label">分类</span>
+              <input name="category" value="{{ .Form.Category }}" maxlength="40" required>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="enabled" value="1" {{ if .Form.Enabled }}checked{{ end }}>
+              <span>启用</span>
+            </label>
+          </div>
+          <label>
+            <span class="label">简介</span>
+            <textarea name="description" rows="3" maxlength="500">{{ .Form.Description }}</textarea>
+          </label>
+          <label>
+            <span class="label">标签</span>
+            <input name="tags" value="{{ .Form.Tags }}" placeholder="辨证,古籍,药材">
+          </label>
+          <label>
+            <span class="label">Skill 指令</span>
+            <textarea name="instruction" rows="10" required>{{ .Form.Instruction }}</textarea>
+          </label>
+          <div class="form-actions">
+            {{ if .Editing }}<a href="/skillhub">取消编辑</a>{{ end }}
+            <button type="submit">{{ if .Editing }}保存修改{{ else }}创建 Skill{{ end }}</button>
+          </div>
+        </form>
+      </aside>
+    </section>
+  </main>
+  </div>
+</body>
+</html>

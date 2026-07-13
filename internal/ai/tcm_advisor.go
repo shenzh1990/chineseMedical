@@ -28,25 +28,29 @@ func NewTCMAdvisor(cfg config.AIConfig) TCMAdvisor {
 	return TCMAdvisor{researcher: NewFoodResearcher(cfg)}
 }
 
-func (a TCMAdvisor) Answer(ctx context.Context, question, mode string, history []TCMChatMessage, foods []model.MedicatedFood) (TCMAnswer, error) {
+func (a TCMAdvisor) Answer(ctx context.Context, question, mode string, history []TCMChatMessage, foods []model.MedicatedFood, skill *model.Skill, mcps []model.Skill) (TCMAnswer, error) {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return TCMAnswer{}, fmt.Errorf("question is required")
 	}
 	intent := AnalyzeTCMIntent(question, mode)
 
-	payload := researchRequest{
-		Model:        a.researcher.cfg.ResearchModel,
-		Instructions: tcmAdvisorInstructions(intent),
-		Input:        tcmAdvisorPrompt(question, intent, history, foods),
+	messages := []chatCompletionMessage{
+		{
+			Role:    "system",
+			Content: tcmAdvisorInstructions(intent, skill, mcps),
+		},
+		{
+			Role:    "user",
+			Content: tcmAdvisorPrompt(question, intent, history, foods, skill, mcps),
+		},
 	}
 
-	result, err := a.researcher.callModel(ctx, payload)
+	text, err := a.researcher.chatCompletionText(ctx, messages)
 	if err != nil {
 		return TCMAnswer{}, err
 	}
 
-	text, _ := researchOutputText(result)
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return TCMAnswer{}, fmt.Errorf("tcm advisor returned empty answer")
@@ -59,15 +63,58 @@ func (a TCMAdvisor) Answer(ctx context.Context, question, mode string, history [
 	}, nil
 }
 
-func tcmAdvisorInstructions(intent TCMIntentResult) string {
-	return fmt.Sprintf(`你是中医智能问答助手，参考中医多智能体问答系统的设计，将问题按模式处理。当前模式是：%s。
+func (a TCMAdvisor) AnswerStream(ctx context.Context, question, mode string, history []TCMChatMessage, foods []model.MedicatedFood, skill *model.Skill, mcps []model.Skill, onDelta func(string) error) (TCMAnswer, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return TCMAnswer{}, fmt.Errorf("question is required")
+	}
+	intent := AnalyzeTCMIntent(question, mode)
+
+	messages := []chatCompletionMessage{
+		{
+			Role:    "system",
+			Content: tcmAdvisorInstructions(intent, skill, mcps),
+		},
+		{
+			Role:    "user",
+			Content: tcmAdvisorPrompt(question, intent, history, foods, skill, mcps),
+		},
+	}
+
+	text, err := a.researcher.streamChatCompletionText(ctx, messages, onDelta)
+	if err != nil {
+		return TCMAnswer{}, err
+	}
+
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return TCMAnswer{}, fmt.Errorf("tcm advisor returned empty answer")
+	}
+
+	return TCMAnswer{
+		Answer: text,
+		Mode:   string(intent.Type),
+		Intent: intent,
+	}, nil
+}
+
+func tcmAdvisorInstructions(intent TCMIntentResult, skill *model.Skill, mcps []model.Skill) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf(`你是中医智能问答助手，参考中医多智能体问答系统的设计，将问题按模式处理。当前模式是：%s。
 识别场景：%s。采用策略：%s。
 回答必须使用中文，结构清晰，语气专业克制。
 你可以解释中医基础知识、养生调理思路和辨证问诊方向，但不能替代医生诊疗，不能给出确诊、保证疗效、处方剂量或要求用户停止现有治疗。
-涉及急症、持续加重、孕产妇、儿童、老人、慢病用药、严重疼痛、胸痛、呼吸困难、意识异常、出血等情况时，必须建议及时就医。`, intent.Type, intent.Label, intent.Strategy)
+涉及急症、持续加重、孕产妇、儿童、老人、慢病用药、严重疼痛、胸痛、呼吸困难、意识异常、出血等情况时，必须建议及时就医。`, intent.Type, intent.Label, intent.Strategy))
+	if skill != nil {
+		builder.WriteString("\n\n用户选择了一个 Skill，请优先按该 Skill 的流程、边界和输出要求组织回答；如果它与医疗安全边界冲突，以安全边界为准。")
+	}
+	if len(mcps) > 0 {
+		builder.WriteString("\n用户还选择了 MCP 能力。当前系统尚未真实连接这些 MCP server，不能声称已经调用外部数据；只能把它们作为可接入能力和下一步工具建议来使用。")
+	}
+	return builder.String()
 }
 
-func tcmAdvisorPrompt(question string, intent TCMIntentResult, history []TCMChatMessage, foods []model.MedicatedFood) string {
+func tcmAdvisorPrompt(question string, intent TCMIntentResult, history []TCMChatMessage, foods []model.MedicatedFood, skill *model.Skill, mcps []model.Skill) string {
 	var builder strings.Builder
 	builder.WriteString("请回答用户的中医相关问题。\n\n")
 	builder.WriteString("识别网络结果：\n")
@@ -88,6 +135,44 @@ func tcmAdvisorPrompt(question string, intent TCMIntentResult, history []TCMChat
 		builder.WriteString(intent.ExternalCapability)
 	}
 	builder.WriteString("\n\n")
+
+	if skill != nil {
+		builder.WriteString("用户选择的 Skill：\n")
+		builder.WriteString("- 名称：")
+		builder.WriteString(skill.Name)
+		builder.WriteString("\n- 分类：")
+		builder.WriteString(skill.Category)
+		if strings.TrimSpace(skill.Description) != "" {
+			builder.WriteString("\n- 简介：")
+			builder.WriteString(skill.Description)
+		}
+		if strings.TrimSpace(skill.Instruction) != "" {
+			builder.WriteString("\n- Skill 指令：\n")
+			builder.WriteString(skill.Instruction)
+		}
+		builder.WriteString("\n\n")
+	}
+
+	if len(mcps) > 0 {
+		builder.WriteString("用户选择的 MCP 能力（当前仅作为待接入能力上下文，不能声称已经真实调用）：\n")
+		for _, item := range mcps {
+			builder.WriteString("- ")
+			builder.WriteString(item.Name)
+			builder.WriteString("（")
+			builder.WriteString(item.Category)
+			builder.WriteString("）")
+			if strings.TrimSpace(item.Description) != "" {
+				builder.WriteString("：")
+				builder.WriteString(item.Description)
+			}
+			if strings.TrimSpace(item.Instruction) != "" {
+				builder.WriteString("\n  接入说明：")
+				builder.WriteString(item.Instruction)
+			}
+			builder.WriteString("\n")
+		}
+		builder.WriteString("\n")
+	}
 
 	if len(intent.CachedClassics) > 0 {
 		builder.WriteString("古籍缓存命中：\n")

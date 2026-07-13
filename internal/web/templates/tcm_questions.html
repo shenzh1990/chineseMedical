@@ -75,11 +75,33 @@
         <strong>{{ .Model }}</strong>
         <p>系统会先进行 6 类中医意图识别，再按场景策略生成回答。当前已接入本地知识库检索；GraphRAG、Neo4j、TCM-CV 会以能力状态提示降级。</p>
 
+        <label class="qa-select-field">
+          <span class="label">问答 Skill</span>
+          <select id="skillSelect">
+            <option value="">默认识别网络</option>
+            {{ range .Skills }}
+              <option value="{{ .ID }}">{{ .Name }}（{{ .Category }}）</option>
+            {{ end }}
+          </select>
+        </label>
+
+        <label class="qa-select-field">
+          <span class="label">MCP 能力</span>
+          <select id="mcpSelect" multiple size="5">
+            {{ range .MCPs }}
+              <option value="{{ .ID }}">{{ .Name }}（{{ .Category }}）</option>
+            {{ end }}
+          </select>
+        </label>
+
+        <span class="label">已选能力</span>
+        <div id="capabilityPanel" class="intent-panel">默认识别网络</div>
+
         <span class="label">识别网络</span>
         <div id="intentPanel" class="intent-panel">等待提问</div>
 
-        <span class="label">参考知识</span>
-        <div id="sourceList" class="qa-sources">暂无命中条目</div>
+        <span class="label">相关推荐方子</span>
+        <div id="sourceList" class="qa-sources">暂无相关推荐</div>
       </aside>
     </section>
   </main>
@@ -92,11 +114,53 @@
     const clearChat = document.getElementById("clearChat");
     const sourceList = document.getElementById("sourceList");
     const intentPanel = document.getElementById("intentPanel");
+    const capabilityPanel = document.getElementById("capabilityPanel");
+    const skillSelect = document.getElementById("skillSelect");
+    const mcpSelect = document.getElementById("mcpSelect");
     const history = [];
 
     function selectedMode() {
       const checked = document.querySelector("input[name='qa_mode']:checked");
       return checked ? checked.value : "auto";
+    }
+
+    function selectedSkillID() {
+      return skillSelect && skillSelect.value ? Number(skillSelect.value) : 0;
+    }
+
+    function selectedMCPIDs() {
+      if (!mcpSelect) {
+        return [];
+      }
+      return Array.from(mcpSelect.selectedOptions).map(option => Number(option.value)).filter(Boolean);
+    }
+
+    function renderCapabilities(skill, mcps) {
+      capabilityPanel.innerHTML = "";
+      const rows = [];
+      if (skill && skill.Name) {
+        rows.push(["Skill", skill.Name]);
+      } else if (skillSelect && skillSelect.selectedOptions.length && skillSelect.value) {
+        rows.push(["Skill", skillSelect.selectedOptions[0].textContent]);
+      } else {
+        rows.push(["Skill", "默认识别网络"]);
+      }
+      if (mcps && mcps.length) {
+        rows.push(["MCP", mcps.map(item => item.Name).join("、")]);
+      } else if (mcpSelect && mcpSelect.selectedOptions.length) {
+        rows.push(["MCP", Array.from(mcpSelect.selectedOptions).map(option => option.textContent).join("、")]);
+      } else {
+        rows.push(["MCP", "未选择"]);
+      }
+      rows.forEach(([label, value]) => {
+        const item = document.createElement("div");
+        const key = document.createElement("span");
+        const text = document.createElement("strong");
+        key.textContent = label;
+        text.textContent = value;
+        item.append(key, text);
+        capabilityPanel.appendChild(item);
+      });
     }
 
     function appendMessage(role, text) {
@@ -112,16 +176,114 @@
       return message;
     }
 
+    function messageBody(message) {
+      return Array.from(message.children).find(child => child.tagName === "P") || null;
+    }
+
+    function renderThoughts(message, thoughts) {
+      const existing = message.querySelector(".thinking-trace");
+      if (existing) {
+        existing.remove();
+      }
+      if (!thoughts || !thoughts.length) {
+        return;
+      }
+
+      const details = document.createElement("details");
+      details.className = "thinking-trace";
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = "思考过程（摘要）";
+      const list = document.createElement("ol");
+      thoughts.forEach(item => {
+        const row = document.createElement("li");
+        const title = document.createElement("span");
+        const detail = document.createElement("p");
+        title.textContent = item.title || "步骤";
+        detail.textContent = item.detail || "";
+        row.append(title, detail);
+        list.appendChild(row);
+      });
+      details.append(summary, list);
+      const body = messageBody(message);
+      if (body) {
+        message.insertBefore(details, body);
+      } else {
+        message.appendChild(details);
+      }
+      chatThread.scrollTop = chatThread.scrollHeight;
+    }
+
+    function renderThinkingTime(message, thinkingTime) {
+      const existing = message.querySelector(".thinking-time");
+      if (existing) {
+        existing.remove();
+      }
+      if (!thinkingTime) {
+        return;
+      }
+      const badge = document.createElement("div");
+      badge.className = "thinking-time";
+      badge.textContent = "思考用时：" + thinkingTime;
+      const trace = message.querySelector(".thinking-trace");
+      if (trace) {
+        message.insertBefore(badge, trace);
+      } else if (messageBody(message)) {
+        message.insertBefore(badge, messageBody(message));
+      } else {
+        message.appendChild(badge);
+      }
+    }
+
+    function formatThinkingElapsed(ms) {
+      if (ms < 1000) {
+        return Math.max(0, Math.round(ms)) + " 毫秒";
+      }
+      return (ms / 1000).toFixed(1) + " 秒";
+    }
+
+    function renderInlineRecommendations(message, items) {
+      const existing = message.querySelector(".recommendation-trace");
+      if (existing) {
+        existing.remove();
+      }
+      if (!items || !items.length) {
+        return;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "recommendation-trace";
+      const title = document.createElement("strong");
+      title.textContent = "推荐方子";
+      const list = document.createElement("div");
+      items.forEach(item => {
+        const link = document.createElement("a");
+        link.href = item.url || ("/foods/" + item.id + "/images");
+        link.textContent = item.name || "未命名方子";
+        const reason = document.createElement("p");
+        reason.textContent = item.reason || "本地知识库检索命中。";
+        const card = document.createElement("section");
+        card.append(link, reason);
+        list.appendChild(card);
+      });
+      wrap.append(title, list);
+      message.appendChild(wrap);
+      chatThread.scrollTop = chatThread.scrollHeight;
+    }
+
     function renderSources(items) {
       sourceList.innerHTML = "";
       if (!items || !items.length) {
-        sourceList.textContent = "暂无命中条目";
+        sourceList.textContent = "暂无相关推荐";
         return;
       }
       items.forEach(item => {
         const entry = document.createElement("a");
-        entry.href = "/foods/" + item.ID + "/images";
-        entry.textContent = "#" + item.ID + " " + item.Name;
+        entry.href = item.url || ("/foods/" + item.id + "/images");
+        const title = document.createElement("strong");
+        const reason = document.createElement("span");
+        title.textContent = "#" + (item.id || "-") + " " + (item.name || "未命名方子");
+        reason.textContent = item.reason || "本地知识库检索命中。";
+        entry.append(title, reason);
         sourceList.appendChild(entry);
       });
     }
@@ -164,7 +326,16 @@
       appendMessage("assistant", "对话已清空，可以开始新的中医智能问答。");
       renderSources([]);
       renderIntent(null);
+      renderCapabilities(null, []);
     });
+
+    if (skillSelect) {
+      skillSelect.addEventListener("change", () => renderCapabilities(null, []));
+    }
+    if (mcpSelect) {
+      mcpSelect.addEventListener("change", () => renderCapabilities(null, []));
+    }
+    renderCapabilities(null, []);
 
     qaForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -179,6 +350,17 @@
       questionInput.value = "";
       questionInput.disabled = true;
       const pending = appendMessage("assistant", "正在分析问题并生成回答...");
+      renderThoughts(pending, [
+        { title: "接收问题", detail: "已收到问题，准备带入上下文。" },
+        { title: "识别场景", detail: "正在判断中医问答场景、情绪和缺失信息。" },
+        { title: "检索知识", detail: "正在检索本地知识库并读取已选 Skill/MCP。" },
+        { title: "整理回答", detail: "将按科普边界生成结构化回复。" },
+      ]);
+      const thinkingStartedAt = performance.now();
+      renderThinkingTime(pending, "0.0 秒");
+      const thinkingTimer = window.setInterval(() => {
+        renderThinkingTime(pending, formatThinkingElapsed(performance.now() - thinkingStartedAt));
+      }, 200);
 
       try {
         const response = await fetch("/tcm/questions/ask", {
@@ -187,6 +369,8 @@
           body: JSON.stringify({
             question,
             mode: selectedMode(),
+            skill_id: selectedSkillID(),
+            mcp_ids: selectedMCPIDs(),
             history: history.slice(-8),
           }),
         });
@@ -194,13 +378,23 @@
         if (!response.ok) {
           throw new Error(payload.error || "问答请求失败。");
         }
-        pending.querySelector("p").textContent = payload.answer || "未返回回答。";
-        history.push({ role: "assistant", content: payload.answer || "" });
-        renderSources(payload.sources || []);
+        const answer = payload.answer || "";
+        messageBody(pending).textContent = answer || "未返回回答。";
+        renderThoughts(pending, payload.thoughts || []);
+        renderThinkingTime(pending, payload.thinking_time || "");
+        renderInlineRecommendations(pending, payload.recommendations || []);
+        renderSources(payload.recommendations || []);
         renderIntent(payload.intent);
+        renderCapabilities(payload.skill, payload.mcps || []);
+        history.push({ role: "assistant", content: answer || "" });
       } catch (error) {
-        pending.querySelector("p").textContent = error.message || "问答请求失败。";
+        renderThinkingTime(pending, formatThinkingElapsed(performance.now() - thinkingStartedAt));
+        const body = messageBody(pending);
+        body.textContent = body.textContent && body.textContent !== "正在分析问题并生成回答..."
+          ? body.textContent + "\n\n" + (error.message || "问答请求失败。")
+          : error.message || "问答请求失败。";
       } finally {
+        window.clearInterval(thinkingTimer);
         questionInput.disabled = false;
         questionInput.focus();
       }

@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ type Handler struct {
 	deps       Dependencies
 	foods      repository.MedicatedFoodRepository
 	renshu     repository.RenShuDataRepository
+	skills     repository.SkillRepository
 	users      repository.UserRepository
 	aiSettings *ai.SettingsStore
 }
@@ -46,7 +48,18 @@ type foodResearchRequest struct {
 type tcmQuestionRequest struct {
 	Question string              `json:"question"`
 	Mode     string              `json:"mode"`
+	SkillID  int64               `json:"skill_id"`
+	MCPIDs   []int64             `json:"mcp_ids"`
 	History  []ai.TCMChatMessage `json:"history"`
+}
+
+type foodRecommendation struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	URL      string `json:"url"`
+	Reason   string `json:"reason"`
+	Effect   string `json:"effect,omitempty"`
 }
 
 type aiSettingsForm struct {
@@ -334,10 +347,20 @@ func (h Handler) ImageSplitter(c *gin.Context) {
 }
 
 func (h Handler) TCMQuestions(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	skills, mcps, err := h.tcmCapabilities(ctx)
+	if err != nil {
+		h.deps.Logger.Warn("list tcm capabilities", "error", err)
+	}
+
 	c.HTML(http.StatusOK, "tcm_questions.html", gin.H{
 		"AppName": h.deps.Config.AppName,
 		"Active":  "tcm-questions",
 		"Model":   h.aiSettings.Config().ResearchModel,
+		"Skills":  skills,
+		"MCPs":    mcps,
 	})
 }
 
@@ -367,8 +390,33 @@ func (h Handler) AskTCMQuestion(c *gin.Context) {
 		h.deps.Logger.Warn("search knowledge for tcm question", "error", err)
 		foods = nil
 	}
+	recommendedFoods, err := h.relatedFoods(ctx, question, foods)
+	if err != nil {
+		h.deps.Logger.Warn("search related foods for tcm question", "error", err)
+		recommendedFoods = foods
+	}
 
-	answer, err := ai.NewTCMAdvisor(cfg).Answer(ctx, question, req.Mode, req.History, foods)
+	selectedSkill, selectedMCPs, err := h.selectedTCMCapabilities(ctx, req.SkillID, req.MCPIDs)
+	if err != nil {
+		h.deps.Logger.Warn("select tcm capabilities", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	intent := ai.AnalyzeTCMIntent(question, req.Mode)
+	recommendations := foodRecommendations(question, recommendedFoods)
+	thoughts := tcmThoughts(
+		intent,
+		req.Mode,
+		req.History,
+		foods,
+		selectedSkill,
+		selectedMCPs,
+	)
+
+	startedAt := time.Now()
+	answer, err := ai.NewTCMAdvisor(cfg).Answer(ctx, question, req.Mode, req.History, foods, selectedSkill, selectedMCPs)
+	thinkingDuration := time.Since(startedAt)
 	if err != nil {
 		h.deps.Logger.Warn("answer tcm question", "error", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": userFacingResearchError(err)})
@@ -376,11 +424,296 @@ func (h Handler) AskTCMQuestion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"answer":  answer.Answer,
-		"mode":    answer.Mode,
-		"intent":  answer.Intent,
-		"sources": foods,
+		"answer":           answer.Answer,
+		"mode":             answer.Mode,
+		"intent":           answer.Intent,
+		"sources":          foods,
+		"recommendations":  recommendations,
+		"skill":            selectedSkill,
+		"mcps":             selectedMCPs,
+		"thoughts":         thoughts,
+		"thinking_time":    formatThinkingTime(thinkingDuration),
+		"thinking_time_ms": thinkingDuration.Milliseconds(),
 	})
+}
+
+func formatThinkingTime(duration time.Duration) string {
+	if duration < time.Second {
+		return fmt.Sprintf("%d 毫秒", duration.Milliseconds())
+	}
+	return fmt.Sprintf("%.1f 秒", duration.Seconds())
+}
+
+func writeTCMStreamEvent(c *gin.Context, event gin.H) bool {
+	select {
+	case <-c.Request.Context().Done():
+		return false
+	default:
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false
+	}
+	if _, err := c.Writer.Write(data); err != nil {
+		return false
+	}
+	if _, err := c.Writer.Write([]byte("\n")); err != nil {
+		return false
+	}
+	c.Writer.Flush()
+	return true
+}
+
+func (h Handler) relatedFoods(ctx context.Context, question string, fallback []model.MedicatedFood) ([]model.MedicatedFood, error) {
+	keywords := recommendationKeywords(question)
+	foods, err := h.foods.Related(ctx, keywords, model.DefaultFoodCategory, 3)
+	if err != nil {
+		return nil, err
+	}
+	if len(foods) > 0 {
+		return foods, nil
+	}
+
+	filtered := []model.MedicatedFood{}
+	for _, item := range fallback {
+		if item.Category == model.DefaultFoodCategory {
+			filtered = append(filtered, item)
+		}
+		if len(filtered) >= 3 {
+			break
+		}
+	}
+	return filtered, nil
+}
+
+func foodRecommendations(question string, foods []model.MedicatedFood) []foodRecommendation {
+	recommendations := make([]foodRecommendation, 0, len(foods))
+	seen := map[int64]bool{}
+	for _, item := range foods {
+		if item.ID <= 0 || seen[item.ID] {
+			continue
+		}
+		seen[item.ID] = true
+		recommendations = append(recommendations, foodRecommendation{
+			ID:       item.ID,
+			Name:     item.Name,
+			Category: item.Category,
+			URL:      fmt.Sprintf("/foods/%d/images", item.ID),
+			Reason:   recommendationReason(question, item),
+			Effect:   firstSentence(item.Effect, 90),
+		})
+		if len(recommendations) >= 3 {
+			break
+		}
+	}
+	return recommendations
+}
+
+func recommendationReason(question string, item model.MedicatedFood) string {
+	question = strings.TrimSpace(question)
+	if question != "" {
+		for _, keyword := range recommendationKeywords(question) {
+			if containsAnyFold(item.Name, keyword) || containsAnyFold(item.Food, keyword) || containsAnyFold(item.Effect, keyword) || containsAnyFold(item.Source, keyword) {
+				return fmt.Sprintf("问题中提到「%s」，该条目的名称、组成或功效描述与之相关。", keyword)
+			}
+		}
+	}
+	if strings.TrimSpace(item.Effect) != "" {
+		return "本地知识库检索命中，功效描述与当前问题语义相关。"
+	}
+	if strings.TrimSpace(item.Food) != "" {
+		return "本地知识库检索命中，组成信息与当前问题语义相关。"
+	}
+	return "本地知识库检索命中，建议打开详情后结合自身情况谨慎参考。"
+}
+
+func recommendationKeywords(text string) []string {
+	replacer := strings.NewReplacer(
+		"，", " ", "。", " ", "、", " ", "；", " ", "？", " ", "！", " ",
+		",", " ", ".", " ", ";", " ", "?", " ", "!", " ", "\n", " ", "\t", " ",
+	)
+	text = replacer.Replace(strings.TrimSpace(text))
+	parts := strings.Fields(text)
+	keywords := []string{}
+	seen := map[string]bool{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len([]rune(part)) < 2 || seen[part] {
+			continue
+		}
+		seen[part] = true
+		keywords = append(keywords, part)
+		if len(keywords) >= 8 {
+			break
+		}
+	}
+	return keywords
+}
+
+func containsAnyFold(text, keyword string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	return text != "" && keyword != "" && strings.Contains(text, keyword)
+}
+
+func firstSentence(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	for _, sep := range []string{"。", "；", "\n"} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			text = text[:idx+len(sep)]
+			break
+		}
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+func tcmThoughts(intent ai.TCMIntentResult, requestedMode string, history []ai.TCMChatMessage, foods []model.MedicatedFood, skill *model.Skill, mcps []model.Skill) []gin.H {
+	mode := strings.TrimSpace(requestedMode)
+	if mode == "" || mode == "auto" {
+		mode = "自动识别"
+	}
+
+	thoughts := []gin.H{
+		{
+			"title":  "接收问题",
+			"detail": fmt.Sprintf("读取用户问题，并带入最近 %d 条对话上下文。", len(history)),
+		},
+		{
+			"title":  "模式与场景",
+			"detail": fmt.Sprintf("问答模式为 %s；识别为%s，置信度约 %.0f%%。", mode, intent.Label, intent.Confidence*100),
+		},
+	}
+
+	if len(intent.MatchedSignals) > 0 {
+		thoughts = append(thoughts, gin.H{
+			"title":  "命中信号",
+			"detail": strings.Join(intent.MatchedSignals, "；"),
+		})
+	}
+
+	if skill != nil {
+		thoughts = append(thoughts, gin.H{
+			"title":  "选用 Skill",
+			"detail": fmt.Sprintf("按「%s」的流程和边界组织回答。", skill.Name),
+		})
+	} else {
+		thoughts = append(thoughts, gin.H{
+			"title":  "选用 Skill",
+			"detail": "未指定 Skill，使用默认中医识别网络和安全边界。",
+		})
+	}
+
+	if len(mcps) > 0 {
+		names := make([]string, 0, len(mcps))
+		for _, item := range mcps {
+			names = append(names, item.Name)
+		}
+		thoughts = append(thoughts, gin.H{
+			"title":  "MCP 能力",
+			"detail": "已选择 " + strings.Join(names, "、") + "；当前作为待接入能力上下文，不声称真实调用外部系统。",
+		})
+	} else {
+		thoughts = append(thoughts, gin.H{
+			"title":  "MCP 能力",
+			"detail": "未选择 MCP，回答只使用本地知识库检索和模型能力。",
+		})
+	}
+
+	sourceDetail := "本地知识库未命中相关调理方条目。"
+	if len(foods) > 0 {
+		names := make([]string, 0, len(foods))
+		for _, item := range foods {
+			names = append(names, item.Name)
+		}
+		sourceDetail = fmt.Sprintf("本地知识库命中 %d 条：%s。", len(foods), strings.Join(names, "、"))
+	}
+	thoughts = append(thoughts, gin.H{
+		"title":  "参考知识",
+		"detail": sourceDetail,
+	})
+
+	if len(intent.MissingInfo) > 0 {
+		thoughts = append(thoughts, gin.H{
+			"title":  "追问信息",
+			"detail": "仍缺少：" + strings.Join(intent.MissingInfo, "、") + "。",
+		})
+	}
+
+	thoughts = append(thoughts, gin.H{
+		"title":  "安全边界",
+		"detail": "回答按健康科普处理，不替代诊断、处方或线下医生判断；高风险情况提示及时就医。",
+	})
+
+	return thoughts
+}
+
+func (h Handler) tcmCapabilities(ctx context.Context) ([]model.Skill, []model.Skill, error) {
+	items, err := h.skills.Enabled(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	skills := []model.Skill{}
+	mcps := []model.Skill{}
+	for _, item := range items {
+		if isMCPCapability(item) {
+			mcps = append(mcps, item)
+			continue
+		}
+		skills = append(skills, item)
+	}
+	return skills, mcps, nil
+}
+
+func (h Handler) selectedTCMCapabilities(ctx context.Context, skillID int64, mcpIDs []int64) (*model.Skill, []model.Skill, error) {
+	var selectedSkill *model.Skill
+	if skillID > 0 {
+		item, err := h.skills.Get(ctx, skillID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("选择的 Skill 不存在")
+		}
+		if !item.Enabled || isMCPCapability(item) {
+			return nil, nil, fmt.Errorf("选择的 Skill 不可用")
+		}
+		selectedSkill = &item
+	}
+
+	selectedMCPs := []model.Skill{}
+	seen := map[int64]bool{}
+	for _, id := range mcpIDs {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		item, err := h.skills.Get(ctx, id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("选择的 MCP 不存在")
+		}
+		if !item.Enabled || !isMCPCapability(item) {
+			return nil, nil, fmt.Errorf("选择的 MCP 不可用")
+		}
+		selectedMCPs = append(selectedMCPs, item)
+		if len(selectedMCPs) >= 5 {
+			break
+		}
+	}
+
+	return selectedSkill, selectedMCPs, nil
+}
+
+func isMCPCapability(item model.Skill) bool {
+	category := strings.ToUpper(item.Category)
+	name := strings.ToUpper(item.Name)
+	tags := strings.ToUpper(item.Tags)
+	return strings.Contains(category, "MCP") || strings.Contains(name, "MCP") || strings.Contains(tags, "MCP")
 }
 
 func (h Handler) AISettings(c *gin.Context) {

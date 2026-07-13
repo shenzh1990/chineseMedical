@@ -57,6 +57,7 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 		deps:       deps,
 		foods:      repository.NewMedicatedFoodRepository(deps.DB),
 		renshu:     repository.NewRenShuDataRepository(deps.DB),
+		skills:     repository.NewSkillRepository(deps.DB),
 		users:      repository.NewUserRepository(deps.DB),
 		aiSettings: ai.NewSettingsStore(deps.Config.AI),
 	}
@@ -74,6 +75,11 @@ func NewRouter(deps Dependencies) (*gin.Engine, error) {
 	protected.GET("/tools/image-splitter", handler.ImageSplitter)
 	protected.GET("/tcm/questions", handler.TCMQuestions)
 	protected.POST("/tcm/questions/ask", handler.AskTCMQuestion)
+	protected.GET("/skillhub", handler.SkillHub)
+	protected.POST("/skillhub", handler.CreateSkill)
+	protected.POST("/skillhub/:id", handler.UpdateSkill)
+	protected.POST("/skillhub/:id/toggle", handler.ToggleSkill)
+	protected.POST("/skillhub/:id/delete", handler.DeleteSkill)
 	protected.GET("/settings/ai", handler.AISettings)
 	protected.POST("/settings/ai", handler.SaveAISettings)
 	protected.POST("/settings/ai/test", handler.TestAISettings)

@@ -127,6 +127,76 @@ func (r MedicatedFoodRepository) Categories(ctx context.Context) ([]model.FoodCa
 	return categories, nil
 }
 
+func (r MedicatedFoodRepository) Related(ctx context.Context, keywords []string, category string, limit int) ([]model.MedicatedFood, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	category = strings.TrimSpace(category)
+
+	args := []any{}
+	whereParts := []string{}
+	keywordWhereParts := []string{}
+	if category != "" {
+		args = append(args, category)
+		whereParts = append(whereParts, fmt.Sprintf("COALESCE(NULLIF(btrim(category), ''), '药食同源') = $%d", len(args)))
+	}
+
+	scoreParts := []string{}
+	for _, keyword := range keywords {
+		keyword = strings.TrimSpace(keyword)
+		if keyword == "" {
+			continue
+		}
+		args = append(args, "%"+keyword+"%")
+		argIndex := len(args)
+		keywordWhereParts = append(keywordWhereParts, fmt.Sprintf("(name ILIKE $%d OR source ILIKE $%d OR food ILIKE $%d OR effect ILIKE $%d)", argIndex, argIndex, argIndex, argIndex))
+		scoreParts = append(scoreParts, fmt.Sprintf(`
+			(CASE WHEN name ILIKE $%d THEN 8 ELSE 0 END) +
+			(CASE WHEN effect ILIKE $%d THEN 5 ELSE 0 END) +
+			(CASE WHEN food ILIKE $%d THEN 3 ELSE 0 END) +
+			(CASE WHEN source ILIKE $%d THEN 1 ELSE 0 END)
+		`, argIndex, argIndex, argIndex, argIndex))
+		if len(scoreParts) >= 8 {
+			break
+		}
+	}
+	if len(scoreParts) == 0 {
+		return nil, nil
+	}
+	whereParts = append(whereParts, "("+strings.Join(keywordWhereParts, " OR ")+")")
+
+	where := "WHERE " + strings.Join(whereParts, " AND ")
+	scoreSQL := strings.Join(scoreParts, " + ")
+	limitArg := len(args) + 1
+	args = append(args, limit)
+
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT id, COALESCE(NULLIF(btrim(category), ''), '药食同源'), name, source, food, method, effect
+		FROM t_medicated_food
+		%s
+		ORDER BY (%s) DESC, id
+		LIMIT $%d
+	`, where, scoreSQL, limitArg), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query related medicated foods: %w", err)
+	}
+	defer rows.Close()
+
+	items := []model.MedicatedFood{}
+	for rows.Next() {
+		var item model.MedicatedFood
+		if err := rows.Scan(&item.ID, &item.Category, &item.Name, &item.Source, &item.Food, &item.Method, &item.Effect); err != nil {
+			return nil, fmt.Errorf("scan related medicated food: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate related medicated foods: %w", err)
+	}
+
+	return items, nil
+}
+
 func (r MedicatedFoodRepository) Create(ctx context.Context, item model.MedicatedFood) (model.MedicatedFood, error) {
 	item.Category = model.NormalizeFoodCategory(item.Category)
 	if item.ID > 0 {

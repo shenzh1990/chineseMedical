@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -40,6 +41,7 @@ type researchRequest struct {
 	Instructions string         `json:"instructions,omitempty"`
 	Input        string         `json:"input"`
 	Tools        []researchTool `json:"tools,omitempty"`
+	Stream       bool           `json:"stream,omitempty"`
 }
 
 type researchTool struct {
@@ -60,6 +62,62 @@ type researchResponse struct {
 			} `json:"annotations"`
 		} `json:"content"`
 	} `json:"output"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
+type researchStreamEvent struct {
+	Type     string            `json:"type"`
+	Delta    string            `json:"delta"`
+	Text     string            `json:"text"`
+	Response *researchResponse `json:"response,omitempty"`
+	Error    *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices,omitempty"`
+}
+
+type chatCompletionMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatCompletionRequest struct {
+	Model    string                  `json:"model"`
+	Messages []chatCompletionMessage `json:"messages"`
+	Stream   bool                    `json:"stream,omitempty"`
+}
+
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
+type chatCompletionStreamEvent struct {
+	Choices []struct {
+		Delta struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -194,6 +252,266 @@ func (r FoodResearcher) callModel(ctx context.Context, payload researchRequest) 
 	return result, nil
 }
 
+func (r FoodResearcher) chatCompletionText(ctx context.Context, messages []chatCompletionMessage) (string, error) {
+	payload := chatCompletionRequest{
+		Model:    r.cfg.ResearchModel,
+		Messages: messages,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal chat completion request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.chatCompletionEndpointURL(), bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create chat completion request: %w", err)
+	}
+	if apiKey := r.apiKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call chat completion model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read chat completion response: %w", err)
+	}
+
+	var result chatCompletionResponse
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if err := json.Unmarshal(respBody, &result); err == nil && result.Error != nil {
+			return "", fmt.Errorf("chat completion model returned %s: %s", resp.Status, result.Error.Message)
+		}
+		return "", fmt.Errorf("chat completion model returned %s (%s): %s", resp.Status, resp.Header.Get("Content-Type"), responseSnippet(respBody))
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse chat completion response from %s (%s): %w; body: %s", resp.Status, resp.Header.Get("Content-Type"), err, responseSnippet(respBody))
+	}
+	if result.Error != nil {
+		return "", fmt.Errorf("chat completion model returned error: %s", result.Error.Message)
+	}
+	for _, choice := range result.Choices {
+		if text := strings.TrimSpace(choice.Message.Content); text != "" {
+			return text, nil
+		}
+	}
+	return "", errors.New("chat completion model returned empty response")
+}
+
+func (r FoodResearcher) streamModelText(ctx context.Context, payload researchRequest, onDelta func(string) error) (string, error) {
+	payload.Stream = true
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal food research stream request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpointURL(), bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create food research stream request: %w", err)
+	}
+	if apiKey := r.apiKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call food research stream model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read food research stream error response: %w", err)
+		}
+		var result researchResponse
+		if err := json.Unmarshal(respBody, &result); err == nil && result.Error != nil {
+			return "", fmt.Errorf("food research model returned %s: %s", resp.Status, result.Error.Message)
+		}
+		return "", fmt.Errorf("food research model returned %s (%s): %s", resp.Status, resp.Header.Get("Content-Type"), responseSnippet(respBody))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024), maxResearchPageBytes)
+
+	var answer strings.Builder
+	var finalText string
+	dataLines := []string{}
+	flush := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		if strings.TrimSpace(data) == "[DONE]" {
+			return nil
+		}
+
+		var event researchStreamEvent
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("parse food research stream event: %w", err)
+		}
+		if event.Error != nil {
+			return fmt.Errorf("food research model returned stream error: %s", event.Error.Message)
+		}
+
+		if text := researchStreamDelta(event); text != "" {
+			answer.WriteString(text)
+			if onDelta != nil {
+				if err := onDelta(text); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if text := researchStreamFinalText(event); text != "" {
+			finalText = text
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
+			if err := flush(); err != nil {
+				return answer.String(), err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return answer.String(), fmt.Errorf("read food research stream response: %w", err)
+	}
+	if err := flush(); err != nil {
+		return answer.String(), err
+	}
+
+	text := answer.String()
+	if text == "" && finalText != "" {
+		text = finalText
+		if onDelta != nil {
+			if err := onDelta(finalText); err != nil {
+				return text, err
+			}
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("food research stream model returned empty response")
+	}
+	return text, nil
+}
+
+func (r FoodResearcher) streamChatCompletionText(ctx context.Context, messages []chatCompletionMessage, onDelta func(string) error) (string, error) {
+	payload := chatCompletionRequest{
+		Model:    r.cfg.ResearchModel,
+		Messages: messages,
+		Stream:   true,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal chat completion stream request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.chatCompletionEndpointURL(), bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create chat completion stream request: %w", err)
+	}
+	if apiKey := r.apiKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call chat completion stream model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read chat completion stream error response: %w", err)
+		}
+		var result chatCompletionResponse
+		if err := json.Unmarshal(respBody, &result); err == nil && result.Error != nil {
+			return "", fmt.Errorf("chat completion model returned %s: %s", resp.Status, result.Error.Message)
+		}
+		return "", fmt.Errorf("chat completion model returned %s (%s): %s", resp.Status, resp.Header.Get("Content-Type"), responseSnippet(respBody))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024), maxResearchPageBytes)
+
+	var answer strings.Builder
+	dataLines := []string{}
+	flush := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		if strings.TrimSpace(data) == "[DONE]" {
+			return nil
+		}
+
+		var event chatCompletionStreamEvent
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("parse chat completion stream event: %w", err)
+		}
+		if event.Error != nil {
+			return fmt.Errorf("chat completion model returned stream error: %s", event.Error.Message)
+		}
+		for _, choice := range event.Choices {
+			if choice.Delta.Content == "" {
+				continue
+			}
+			answer.WriteString(choice.Delta.Content)
+			if onDelta != nil {
+				if err := onDelta(choice.Delta.Content); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
+			if err := flush(); err != nil {
+				return answer.String(), err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return answer.String(), fmt.Errorf("read chat completion stream response: %w", err)
+	}
+	if err := flush(); err != nil {
+		return answer.String(), err
+	}
+
+	text := answer.String()
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("chat completion stream model returned empty response")
+	}
+	return text, nil
+}
+
 func (r FoodResearcher) fetchPageText(ctx context.Context, rawURL string) (string, error) {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -254,6 +572,24 @@ func (r FoodResearcher) apiKey() string {
 
 func (r FoodResearcher) endpointURL() string {
 	return strings.TrimRight(r.cfg.ResearchBaseURL, "/") + r.cfg.ResearchEndpointPath
+}
+
+func (r FoodResearcher) chatCompletionEndpointURL() string {
+	baseURL := strings.TrimRight(r.cfg.ResearchBaseURL, "/")
+	path := strings.TrimSpace(r.cfg.ResearchEndpointPath)
+	if strings.Contains(path, "chat/completions") {
+		if strings.HasSuffix(baseURL, "/v1") && strings.HasPrefix(path, "/v1/") {
+			return strings.TrimSuffix(baseURL, "/v1") + path
+		}
+		if strings.HasPrefix(path, "/") {
+			return baseURL + path
+		}
+		return baseURL + "/" + path
+	}
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + "/chat/completions"
+	}
+	return baseURL + "/v1/chat/completions"
 }
 
 func foodResearchInstructions() string {
@@ -358,6 +694,32 @@ func researchOutputText(result researchResponse) (string, []string) {
 		}
 	}
 	return strings.Join(parts, "\n"), urls
+}
+
+func researchStreamDelta(event researchStreamEvent) string {
+	if event.Delta != "" {
+		return event.Delta
+	}
+	for _, choice := range event.Choices {
+		if choice.Delta.Content != "" {
+			return choice.Delta.Content
+		}
+		if choice.Message.Content != "" {
+			return choice.Message.Content
+		}
+	}
+	return ""
+}
+
+func researchStreamFinalText(event researchStreamEvent) string {
+	if event.Text != "" && strings.HasSuffix(event.Type, ".done") {
+		return event.Text
+	}
+	if event.Response != nil {
+		text, _ := researchOutputText(*event.Response)
+		return text
+	}
+	return ""
 }
 
 func parseFoodResearchDraft(text string) (FoodResearchDraft, error) {
